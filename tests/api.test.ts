@@ -4,6 +4,16 @@ import { Client, SETUP_TOKEN, addGame, createAdmin, login, makeEnv, playGame, se
 
 let env: Env, dispose: () => Promise<void>, admin: Client, pub: Client;
 let L: Awaited<ReturnType<typeof seedLeague>>;
+/** Overall records as the public site reports them: abbr -> { games, wins, pf, pa }. */
+const recordsNow = async () => {
+  const out: Record<string, { games: number; wins: number; pf: number; pa: number }> = {};
+  for (const t of (await pub.get('/teams')).json.teams) {
+    const [w, l] = String(t.record).split('-').map(Number);
+    const d = (await pub.get(`/teams/${t.id}`)).json.team;
+    out[t.abbr] = { games: w + l, wins: w, pf: d.pf, pa: d.pa };
+  }
+  return out;
+};
 
 beforeAll(async () => {
   ({ env, dispose } = await makeEnv());
@@ -132,25 +142,24 @@ describe('simulation, review and publishing', () => {
     expect((await pub.get(`/admin/runs/${runId}`)).status).toBe(401);
     const early = await admin.post(`/admin/runs/${runId}/publish`, {});
     expect(early.status).toBe(409);
-    const st = (await pub.get('/standings')).json.conferences.flatMap((c: any) => c.rows);
-    expect(st.every((r: any) => r.w + r.l === 0)).toBe(true);
+    expect(Object.values(await recordsNow()).every((r) => r.games === 0)).toBe(true);
+    expect((await pub.get('/standings')).status).toBe(404); // standings are not part of this site
   });
   it('cannot approve or publish a result that failed validation (database rule)', async () => {
     await expect(env.DB.prepare("INSERT INTO simulation_runs (id, game_id, mode, seed, status, away_score, home_score, valid, result, created_at) VALUES ('bad', ?1, 'sim', 's', 'rejected', 1, 0, 0, '{}', 1)").bind((L as any).g1).run()).resolves.toBeTruthy();
     await expect(env.DB.prepare("UPDATE simulation_runs SET status = 'approved' WHERE id = 'bad'").run()).rejects.toThrow(/failed validation/);
     await expect(env.DB.prepare("UPDATE simulation_runs SET away_score = 99 WHERE id = ?1").bind(runId).run()).rejects.toThrow(/immutable/);
   });
-  it('publishes exactly once under concurrent requests and updates standings', async () => {
+  it('publishes exactly once under concurrent requests and updates team records', async () => {
     expect((await admin.post(`/admin/runs/${runId}/approve`)).status).toBe(200);
     const other = await login(env, 3);
     const [a, b] = await Promise.all([admin.post(`/admin/runs/${runId}/publish`, {}), other.post(`/admin/runs/${runId}/publish`, {})]);
     expect([a.status, b.status].sort()).toEqual([200, 409]);
     const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM published_results WHERE game_id = ?1').bind((L as any).g1).first<{ n: number }>();
     expect(n!.n).toBe(1);
-    const st = (await pub.get('/standings')).json.conferences.flatMap((c: any) => c.rows);
-    const A = st.find((r: any) => r.team.abbr === 'AAA'), B = st.find((r: any) => r.team.abbr === 'BBB');
-    expect(A.w + A.l).toBe(1); expect(B.w + B.l).toBe(1);
-    expect(A.w).toBe(final[0] > final[1] ? 1 : 0);
+    const { AAA: A, BBB: B } = await recordsNow();
+    expect(A.games).toBe(1); expect(B.games).toBe(1);
+    expect(A.wins).toBe(final[0] > final[1] ? 1 : 0);
     expect(A.pf).toBe(final[0]); expect(B.pf).toBe(final[1]);
     const game = (await pub.get(`/games/${(L as any).g1}`)).json;
     expect(game.game.status).toBe('final');
@@ -180,9 +189,8 @@ describe('simulation, review and publishing', () => {
     const ok = await admin.post(`/admin/runs/${sim.json.runId}/publish`, { confirm: true, reason: 'Wrong seed used' });
     expect(ok.status).toBe(200);
     expect(ok.json).toMatchObject({ version: 2, correction: true });
-    const st = (await pub.get('/standings')).json.conferences.flatMap((c: any) => c.rows);
-    const A = st.find((r: any) => r.team.abbr === 'AAA');
-    expect(A.w + A.l).toBe(1); // still one game, not two
+    const A = (await recordsNow()).AAA;
+    expect(A.games).toBe(1); // still one game, not two
     expect(A.pf).toBe(sim.json.final[0]);
     const box = (await pub.get(`/games/${g}`)).json.result.playerStats;
     const leaders = (await pub.get('/leaders')).json.players;
@@ -202,8 +210,7 @@ describe('simulation, review and publishing', () => {
     expect((await admin.patch(`/admin/games/${g}`, { awayTeamId: L.teams.CCC })).status).toBe(409);
     expect((await admin.post(`/admin/games/${g}/unpublish`, { reason: 'x' })).status).toBe(400);
     expect((await admin.post(`/admin/games/${g}/unpublish`, { reason: 'Played with wrong roster', confirm: true })).status).toBe(200);
-    const st = (await pub.get('/standings')).json.conferences.flatMap((c: any) => c.rows);
-    expect(st.every((r: any) => r.w + r.l === 0)).toBe(true);
+    expect(Object.values(await recordsNow()).every((r) => r.games === 0)).toBe(true);
     expect((await pub.get('/leaders')).json.players).toHaveLength(0);
     expect((await pub.get(`/games/${g}`)).json.game.status).toBe('scheduled');
   });
@@ -219,8 +226,7 @@ describe('simulation, review and publishing', () => {
     expect(view.replay.note).toMatch(/not being played live/i);
     expect(view.result.plays.length).toBeLessThan(5);
     expect(view.result.playerStats).toBeNull();
-    const st = (await pub.get('/standings')).json.conferences.flatMap((c: any) => c.rows);
-    expect(st.find((r: any) => r.team.abbr === 'CCC').w + st.find((r: any) => r.team.abbr === 'CCC').l).toBe(0);
+    expect((await recordsNow()).CCC.games).toBe(0);
     await admin.post(`/admin/games/${g}/unpublish`, { reason: 'end of test', confirm: true });
   });
   it('isolates failures in a batch: one bad game does not affect the others', async () => {
@@ -313,7 +319,7 @@ describe('primetime imports', () => {
 });
 
 describe('rankings', () => {
-  it('stores manual AP rankings separately from standings; recommendations never overwrite them', async () => {
+  it('stores manual AP rankings; computed recommendations never overwrite them', async () => {
     const order = [L.teams.DDD, L.teams.AAA, L.teams.CCC];
     expect((await admin.put('/admin/rankings', { seasonId: L.season, week: 1, teamIds: order })).status).toBe(200);
     expect((await admin.put('/admin/rankings', { seasonId: L.season, week: 1, teamIds: [L.teams.AAA, L.teams.AAA] })).status).toBe(422);

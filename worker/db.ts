@@ -27,8 +27,7 @@ export const MIGRATIONS: string[][] = [
     `CREATE TABLE login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, at INTEGER NOT NULL, ok INTEGER NOT NULL)`,
     `CREATE INDEX login_attempts_email ON login_attempts(email, at)`,
 
-    `CREATE TABLE seasons (id TEXT PRIMARY KEY, year INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, is_current INTEGER NOT NULL DEFAULT 0, weeks INTEGER NOT NULL DEFAULT 14,
-       tiebreakers TEXT NOT NULL DEFAULT '["head_to_head","conference_record","point_differential","points_for","points_against"]', created_at INTEGER NOT NULL)`,
+    `CREATE TABLE seasons (id TEXT PRIMARY KEY, year INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, is_current INTEGER NOT NULL DEFAULT 0, weeks INTEGER NOT NULL DEFAULT 14, created_at INTEGER NOT NULL)`,
     `CREATE TABLE conferences (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, abbr TEXT NOT NULL)`,
     `CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, short_name TEXT NOT NULL, abbr TEXT NOT NULL UNIQUE, mascot TEXT,
        primary_color TEXT NOT NULL DEFAULT '#1e3a5f', secondary_color TEXT NOT NULL DEFAULT '#ffffff', logo TEXT, stadium TEXT, created_at INTEGER NOT NULL)`,

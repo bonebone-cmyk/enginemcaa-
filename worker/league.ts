@@ -1,10 +1,10 @@
-// League data access shared by public and admin routes. Records, standings and season statistics are always
+// League data access shared by public and admin routes. Records and season statistics are always
 // aggregated from officially published games; nothing is incremented by hand, so nothing can be double-counted.
 import { DEFAULT_CONFIG, POSITIONS, type Position, type RosterPlayer, type SimConfig, type TeamInput } from '../engine/types';
 import { HttpError } from './auth';
 import { all, first, j, type DB } from './db';
 
-export interface SeasonRow { id: string; year: number; name: string; is_current: number; weeks: number; tiebreakers: string }
+export interface SeasonRow { id: string; year: number; name: string; is_current: number; weeks: number }
 export interface GameRow {
   id: string; season_id: string; week: number; away_team_id: string; home_team_id: string; kickoff_at: number | null; network: string | null; stadium: string | null;
   neutral_site: number; status: string; mode: 'sim' | 'primetime'; designations: string; away_score: number | null; home_score: number | null; final_at: number | null;
@@ -68,55 +68,6 @@ export async function ranks(db: DB, seasonId: string, week?: number | null): Pro
   if (w?.week == null) return { week: null, map: new Map() };
   const rows = await all<{ team_id: string; rank: number }>(db, "SELECT team_id, rank FROM rankings WHERE season_id = ?1 AND poll = 'AP' AND week = ?2", seasonId, w.week);
   return { week: w.week, map: new Map(rows.map((r) => [r.team_id, r.rank])) };
-}
-
-export interface StandingRow { teamId: string; w: number; l: number; cw: number; cl: number; pct: number; confPct: number; pf: number; pa: number; streak: string; rank: number }
-
-/** Conference standings with configurable tiebreakers, applied in order to teams tied on conference win percentage. */
-export function standings(teams: TeamRow[], rec: Map<string, TeamRecord>, tiebreakers: string[]): { conference: { id: string | null; name: string; abbr: string }; rows: StandingRow[] }[] {
-  const groups = new Map<string, TeamRow[]>();
-  for (const t of teams) if (t.in_season) (groups.get(t.conference_id ?? '') ?? groups.set(t.conference_id ?? '', []).get(t.conference_id ?? '')!).push(t);
-  const pct = (w: number, l: number) => (w + l ? w / (w + l) : 0);
-  const out = [];
-  for (const [cid, ts] of groups) {
-    const base = ts.map((t) => {
-      const r = rec.get(t.id) ?? emptyRecord();
-      return { t, r, confPct: pct(r.cw, r.cl), pct: pct(r.w, r.l) };
-    });
-    // Primary key: conference record (overall record for teams with no conference games yet / independents).
-    const key = (x: (typeof base)[number]) => (x.r.cw + x.r.cl > 0 ? x.confPct : cid ? -1 + x.pct * 1e-6 : x.pct);
-    const tiers = new Map<number, typeof base>();
-    for (const b of base) (tiers.get(key(b)) ?? tiers.set(key(b), []).get(key(b))!).push(b);
-    const ordered: typeof base = [];
-    for (const k of [...tiers.keys()].sort((a, b) => b - a)) {
-      const tied = tiers.get(k)!;
-      const ids = new Set(tied.map((x) => x.t.id));
-      const metric: Record<string, (x: (typeof base)[number]) => number> = {
-        head_to_head: (x) => { const g = x.r.games.filter((m) => ids.has(m.opp)); return g.length ? g.filter((m) => m.won).length / g.length : 0.5; },
-        conference_record: (x) => x.confPct,
-        overall_record: (x) => x.pct,
-        point_differential: (x) => x.r.pf - x.r.pa,
-        points_for: (x) => x.r.pf,
-        points_against: (x) => -x.r.pa,
-      };
-      tied.sort((a, b) => {
-        for (const tb of [...tiebreakers, 'overall_record']) {
-          const m = metric[tb];
-          if (!m) continue;
-          const d = m(b) - m(a);
-          if (Math.abs(d) > 1e-9) return d;
-        }
-        return a.t.name.localeCompare(b.t.name);
-      });
-      ordered.push(...tied);
-    }
-    out.push({
-      conference: { id: cid || null, name: ts[0].conference_name ?? 'Independents', abbr: ts[0].conference_abbr ?? 'IND' },
-      rows: ordered.map((x, i) => ({ teamId: x.t.id, w: x.r.w, l: x.r.l, cw: x.r.cw, cl: x.r.cl, pct: x.pct, confPct: x.confPct, pf: x.r.pf, pa: x.r.pa, streak: x.r.streak, rank: i + 1 })),
-    });
-  }
-  out.sort((a, b) => a.conference.name.localeCompare(b.conference.name));
-  return out;
 }
 
 export async function simConfig(db: DB, seasonId: string): Promise<SimConfig> {

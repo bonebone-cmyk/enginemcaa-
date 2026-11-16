@@ -1,7 +1,7 @@
 # MCAA Football — Simulation & Statistics Engine
 
 A complete site for the Minecraft Collegiate Athletic Association: a public college-football site (scores, schedule,
-standings, rankings, teams, players, leaderboards, game pages) and a private league office where exactly four
+rankings, teams, players, leaderboards, game pages) and a private league office where exactly four
 administrators run simulations, import College Football 27 results, review and publish.
 
 It runs entirely on Cloudflare: one **Worker** (the API), one **D1** database, and the React site served as static assets.
@@ -70,7 +70,7 @@ SETUP_TOKEN=<same value as .dev.vars> npm run seed:demo -- http://127.0.0.1:8787
 | Folder | Responsibility |
 | --- | --- |
 | `engine/` | Pure TypeScript, no I/O. Play-by-play simulation (`sim.ts`), independent percentage checks (`percentages.ts`), roster eligibility (`roster.ts`), statistics derived from the play ledger (`stats.ts`), validation (`validate.ts`), highlights, recap, and the score-constrained CFB 27 reconstruction (`primetime.ts`). |
-| `worker/` | Hono API on Cloudflare Workers: `auth.ts` (sessions, four-admin rule), `db.ts` (schema + self-migration), `league.ts` (records, standings), `percent.ts` (snapshots/imports), `publish.ts` (transactional publishing), `ai.ts` (Claude recaps and screenshot reading), `public.ts`, `admin.ts`. |
+| `worker/` | Hono API on Cloudflare Workers: `auth.ts` (sessions, four-admin rule), `db.ts` (schema + self-migration), `league.ts` (team records), `percent.ts` (snapshots/imports), `publish.ts` (transactional publishing), `ai.ts` (Claude recaps and screenshot reading), `public.ts`, `admin.ts`. |
 | `src/` | React + TypeScript + Tailwind site: public pages and the eleven-section admin dashboard. Charts use Recharts. |
 | `tests/` | Vitest suites. API tests run against a real local D1 database. |
 | `docs/` | [`PERCENTAGES.md`](docs/PERCENTAGES.md) (exact meaning of Activity / Upset / Star), [`CALIBRATION.md`](docs/CALIBRATION.md) (measured output vs. college football ranges), [`DATA_MODEL.md`](docs/DATA_MODEL.md). |
@@ -104,8 +104,7 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 **Built and tested** (automated tests + browser run-through of every page and the main admin workflows)
 
 - Public site: home/scoreboard/featured game/league digest, schedule with filters, game page (summary, box score, team
-  stats, play-by-play, highlights, scoring, score chart), team pages, player pages, standings with configurable
-  tiebreakers, rankings, sortable leaderboards with minimum-attempt rules, multi-season switching.
+  stats, play-by-play, highlights, scoring, score chart), team pages, player pages, rankings, sortable leaderboards with minimum-attempt rules, multi-season switching.
 - Admin: Simulation Center (single game, Regenerate, Simulate Week with per-game isolation), Primetime Import Center,
   Schedule/Team/Roster managers (CSV roster import, logos), Percentage Integration (CSV/JSON import, snapshots),
   Rankings Manager (manual + computed suggestion), Results Review, Publishing Center (instant or replay presentation,

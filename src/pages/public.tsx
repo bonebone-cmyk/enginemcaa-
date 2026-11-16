@@ -192,39 +192,6 @@ export function Schedule() {
   );
 }
 
-// ================================================================== STANDINGS
-const TB_LABEL: Record<string, string> = { head_to_head: 'head-to-head', conference_record: 'conference record', overall_record: 'overall record', point_differential: 'point differential', points_for: 'points scored', points_against: 'fewest points allowed' };
-export function Standings() {
-  const { seasonId, meta } = useSeason();
-  const q = useApi<any>(seasonId ? `/standings${qs({ season: seasonId })}` : null);
-  if (meta && !meta.season) return <NoSeason />;
-  return (
-    <>
-      <PageTitle sub="Only completed, officially published games count.">Standings</PageTitle>
-      <Load q={q}>{(d) => (
-        <div className="space-y-5">
-          {!d.conferences.length && <Empty>No teams have been entered in this season.</Empty>}
-          {d.conferences.map((c: any) => (
-            <Card key={c.conference.id ?? 'ind'} title={c.conference.name} pad={false}>
-              <div className="scroll-x">
-                <table className="w-full min-w-[640px]">
-                  <thead><tr className="border-b border-ink-700"><th className={th}>#</th><th className={th}>Team</th><th className={thr}>Conf</th><th className={thr}>Overall</th><th className={thr}>Pct</th><th className={thr}>PF</th><th className={thr}>PA</th><th className={thr}>Diff</th><th className={thr}>Streak</th></tr></thead>
-                  <tbody>{c.rows.map((r: any) => (
-                    <tr key={r.teamId} className="border-b border-ink-800 last:border-0 hover:bg-ink-800">
-                      <td className={cx(td, 'w-8 text-ink-400 tnum')}>{r.rank}</td>
-                      <td className={td}><Link to={`/teams/${r.team.id}`} className="flex items-center gap-2 font-medium hover:text-gold-soft"><TeamLogo team={r.team} size={22} /><span><Rank n={r.team.rank} />{r.team.name}</span></Link></td>
-                      <td className={cx(tdr, 'font-semibold')}>{r.cw}-{r.cl}</td><td className={tdr}>{r.w}-{r.l}</td><td className={tdr}>{r.w + r.l ? r.pct.toFixed(3).replace(/^0/, '') : '—'}</td>
-                      <td className={tdr}>{r.pf}</td><td className={tdr}>{r.pa}</td><td className={cx(tdr, r.pf - r.pa > 0 ? 'text-emerald-300' : r.pf - r.pa < 0 ? 'text-red-300' : '')}>{r.pf - r.pa > 0 ? '+' : ''}{r.pf - r.pa}</td><td className={tdr}>{r.streak || '—'}</td>
-                    </tr>))}</tbody>
-                </table>
-              </div>
-            </Card>))}
-          {d.tiebreakers.length > 0 && <p className="text-xs text-ink-400">Ties in conference record are broken, in order, by: {d.tiebreakers.map((t: string) => TB_LABEL[t] ?? t).join(', ')}.</p>}
-        </div>)}</Load>
-    </>
-  );
-}
-
 // ================================================================== RANKINGS
 export function Rankings() {
   const { seasonId, meta } = useSeason();
@@ -233,7 +200,7 @@ export function Rankings() {
   if (meta && !meta.season) return <NoSeason />;
   return (
     <>
-      <PageTitle sub="The official MCAA Top 25, set by the league office. Rankings are separate from conference standings."
+      <PageTitle sub="The official MCAA Top 25, set by the league office."
         right={q.data?.weeks.length ? <Select aria-label="Poll week" className="!w-auto" value={q.data.week ?? ''} onChange={(e) => setWeek(Number(e.target.value))}>{q.data.weeks.map((w: number) => <option key={w} value={w}>Week {w} poll</option>)}</Select> : null}>AP Top 25</PageTitle>
       <Load q={q}>{(d) => !d.rankings.length ? <Empty>No rankings have been published for this season.</Empty> : (
         <Card pad={false}>

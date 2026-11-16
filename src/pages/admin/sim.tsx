@@ -36,11 +36,11 @@ export function PublishDialog({ runId, mode, correction, onClose, onDone }: { ru
   return (
     <Modal title={correction ? 'Correct an official result' : 'Publish result'} onClose={onClose}>
       <div className="space-y-3">
-        {correction && <Notice tone="warn">This game already has an official result ({correction.away}–{correction.home}). Publishing replaces it; standings and season statistics are recalculated, the previous version is kept in history and the change is written to the audit log.</Notice>}
+        {correction && <Notice tone="warn">This game already has an official result ({correction.away}–{correction.home}). Publishing replaces it; team records and season statistics are recalculated, the previous version is kept in history and the change is written to the audit log.</Notice>}
         {mode === 'sim' ? (
           <div className="space-y-2">
             <label className="flex items-start gap-2 text-sm"><input type="radio" className="mt-1 accent-[#f5b301]" checked={!present} onChange={() => setPresent(false)} /><span><b>Instant.</b> The final score, box score and play-by-play are public immediately.</span></label>
-            <label className="flex items-start gap-2 text-sm"><input type="radio" className="mt-1 accent-[#f5b301]" checked={present} onChange={() => setPresent(true)} /><span><b>Presentation.</b> The finished game is replayed play by play for viewers, labeled as a simulation replay. The result is already decided and cannot change; it counts in standings when the replay ends.</span></label>
+            <label className="flex items-start gap-2 text-sm"><input type="radio" className="mt-1 accent-[#f5b301]" checked={present} onChange={() => setPresent(true)} /><span><b>Presentation.</b> The finished game is replayed play by play for viewers, labeled as a simulation replay. The result is already decided and cannot change; it counts in team records and statistics when the replay ends.</span></label>
             {present && <Field label="Seconds per play"><Select value={seconds} onChange={(e) => setSeconds(Number(e.target.value))}>{[1, 2, 4, 8, 15, 30].map((s) => <option key={s} value={s}>{s} s per play (about {Math.round((170 * s) / 60)} min total)</option>)}</Select></Field>}
           </div>
         ) : <p className="text-sm text-ink-200">The verified CFB 27 score becomes official immediately. Reconstructed statistics and highlights are labeled as generated on the public page.</p>}
@@ -369,7 +369,7 @@ export function PublishingCenter() {
       {withdraw && (
         <Modal title="Withdraw an official result" onClose={() => setWithdraw(null)}>
           <div className="space-y-3">
-            <Notice tone="warn">{team(withdraw.away_team_id).short} {withdraw.away_score} – {withdraw.home_score} {team(withdraw.home_team_id).short} will no longer be official. The game returns to “scheduled”, standings and season statistics are recalculated without it, and the withdrawn version stays in history.</Notice>
+            <Notice tone="warn">{team(withdraw.away_team_id).short} {withdraw.away_score} – {withdraw.home_score} {team(withdraw.home_team_id).short} will no longer be official. The game returns to “scheduled”, team records and season statistics are recalculated without it, and the withdrawn version stays in history.</Notice>
             <Field label="Reason (required)"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
             <Check label="I confirm I am withdrawing an official result." checked={confirm} onChange={setConfirm} />
             <ErrorBox error={act.error} />

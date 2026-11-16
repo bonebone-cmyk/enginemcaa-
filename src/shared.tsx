@@ -134,7 +134,7 @@ export function GameCard({ g, compact }: { g: Game; compact?: boolean }) {
 }
 
 // ------------------------------------------------------------------ page chrome
-const NAV = [['/', 'Scores'], ['/schedule', 'Schedule'], ['/standings', 'Standings'], ['/rankings', 'Rankings'], ['/teams', 'Teams'], ['/stats', 'Stats']] as const;
+const NAV = [['/', 'Scores'], ['/schedule', 'Schedule'], ['/rankings', 'Rankings'], ['/teams', 'Teams'], ['/stats', 'Stats']] as const;
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">

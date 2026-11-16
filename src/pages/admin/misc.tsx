@@ -91,7 +91,7 @@ export function RankingsManager() {
         <h1 className="font-display text-3xl font-bold uppercase">Rankings Manager</h1>
         <Field label="Poll week" className="ml-auto w-32"><Select value={week} onChange={(e) => setWeek(Number(e.target.value))}>{[0, ...weeksOf(meta)].map((w) => <option key={w} value={w}>{w === 0 ? 'Preseason' : `Week ${w}`}</option>)}</Select></Field>
       </div>
-      <p className="max-w-3xl text-sm text-ink-300">AP-style rankings are set by administrators and are independent of conference standings. A week without its own poll shows the most recent earlier poll publicly.</p>
+      <p className="max-w-3xl text-sm text-ink-300">AP-style rankings are set by administrators. A week without its own poll shows the most recent earlier poll publicly.</p>
       <ErrorBox error={act.error} />
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card title={`Week ${week} poll`} action={q.data && (q.data.published ? <Badge tone="green">Published</Badge> : <Badge>Not published</Badge>)}>
@@ -120,17 +120,15 @@ export function RankingsManager() {
 }
 
 // ================================================================== SIMULATION SETTINGS
-const TB: [string, string][] = [['head_to_head', 'Head-to-head among tied teams'], ['conference_record', 'Conference record'], ['overall_record', 'Overall record'], ['point_differential', 'Point differential'], ['points_for', 'Points scored'], ['points_against', 'Fewest points allowed']];
 export function SimSettings() {
   const { seasonId } = useSeason();
   const q = useApi<any>(`/admin/settings${qs({ season: seasonId })}`);
   const [c, setC] = useState<Row | null>(null);
-  const [tb, setTb] = useState<string[]>([]);
   const [pw, setPw] = useState({ current: '', next: '' });
   const act = useAction();
   const pwAct = useAction();
   const [saved, setSaved] = useState('');
-  useEffect(() => { if (q.data) { setC(q.data.config); setTb(q.data.tiebreakers); } }, [q.data]);
+  useEffect(() => { if (q.data) setC(q.data.config); }, [q.data]);
   if (!c) return q.error ? <ErrorBox error={q.error} /> : null;
   const num = (k: string, label: string, hint: string, step = 0.1) => <Field label={label} hint={hint}><Input type="number" step={step} value={c[k]} onChange={(e) => setC({ ...c, [k]: e.target.value })} /></Field>;
   return (
@@ -148,17 +146,10 @@ export function SimSettings() {
         </div>
         <p className="mt-3 text-xs text-ink-400">The three percentage effects are separate dials because the three checks are separate: they are never added together or averaged into one number.</p>
       </Card>
-      <Card title="Conference tiebreakers (applied in this order)">
-        <ol className="space-y-1">{tb.map((k, i) => <li key={k} className="flex items-center gap-2 rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-sm"><span className="w-5 text-center font-bold tnum">{i + 1}</span><span className="flex-1">{TB.find((x) => x[0] === k)?.[1] ?? k}</span>
-          <button aria-label="Move up" disabled={i === 0} onClick={() => setTb((l) => { const n = [...l]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; })} className="rounded p-1 hover:bg-ink-700 disabled:opacity-30"><ArrowUp className="size-4" /></button>
-          <button aria-label="Remove" onClick={() => setTb(tb.filter((x) => x !== k))} className="rounded p-1 hover:bg-ink-700"><X className="size-4" /></button></li>)}</ol>
-        <div className="mt-2 flex flex-wrap gap-1.5">{TB.filter((x) => !tb.includes(x[0])).map(([k, label]) => <Button key={k} size="sm" variant="outline" onClick={() => setTb([...tb, k])}>+ {label}</Button>)}</div>
-      </Card>
       <ErrorBox error={act.error} />
       <div className="flex items-center gap-3"><Button variant="primary" busy={act.busy} onClick={() => act.run(async () => {
         setSaved('');
         await api.put('/admin/settings', { seasonId, config: { homeFieldAdvantage: Number(c.homeFieldAdvantage), sackConvention: c.sackConvention, activityEffect: Number(c.activityEffect), upsetGapClosure: Number(c.upsetGapClosure), starBoost: Number(c.starBoost), allowInactive: !!c.allowInactive } });
-        await api.patch(`/admin/seasons/${seasonId}`, { tiebreakers: tb });
         setSaved('Settings saved.'); q.reload();
       })}>Save settings</Button>{saved && <span className="text-sm text-emerald-300">{saved}</span>}</div>
       <Card title="AI features">

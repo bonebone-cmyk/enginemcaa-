@@ -4,7 +4,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import './index.css';
 import { GamePage } from './pages/Game';
 import { PlayerPage, TeamPage } from './pages/TeamPlayer';
-import { Home, Leaders, Rankings, Schedule, Standings, Teams } from './pages/public';
+import { Home, Leaders, Rankings, Schedule, Teams } from './pages/public';
 import { Layout, SeasonProvider } from './shared';
 import { Empty, Spinner } from './ui';
 
@@ -27,7 +27,6 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/teams" element={<Teams />} />
                 <Route path="/teams/:id" element={<TeamPage />} />
                 <Route path="/players/:id" element={<PlayerPage />} />
-                <Route path="/standings" element={<Standings />} />
                 <Route path="/rankings" element={<Rankings />} />
                 <Route path="/stats" element={<Leaders />} />
                 <Route path="*" element={<Empty>Page not found.</Empty>} />

@@ -84,7 +84,7 @@ export async function publishRun(db: DB, admin: AdminUser, runId: string, opts: 
   return { version, finalAt, correction };
 }
 
-/** Withdraw an official result. The historical version and its immutable run are kept; standings and statistics simply stop counting it. */
+/** Withdraw an official result. The historical version and its immutable run are kept; team records and statistics simply stop counting it. */
 export async function unpublishGame(db: DB, admin: AdminUser, gameId: string, reason: string): Promise<void> {
   const current = await first<{ run_id: string; version: number; away_score: number; home_score: number }>(db, 'SELECT * FROM published_results WHERE game_id = ?1 AND is_current = 1', gameId);
   if (!current) throw new HttpError(409, 'This game has no official result to withdraw.');

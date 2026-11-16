@@ -37,14 +37,14 @@ adminRoutes.post('/seasons', async (c) => {
   return c.json({ id }, 201);
 });
 adminRoutes.patch('/seasons/:id', async (c) => {
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(60).optional(), weeks: z.number().int().min(1).max(30).optional(), isCurrent: z.boolean().optional(), tiebreakers: z.array(z.enum(['head_to_head', 'conference_record', 'overall_record', 'point_differential', 'points_for', 'points_against'])).max(6).optional() }));
+  const b = await body(c, z.object({ name: z.string().trim().min(1).max(60).optional(), weeks: z.number().int().min(1).max(30).optional(), isCurrent: z.boolean().optional() }));
   const db = c.env.DB;
   const s = await first<SeasonRow>(db, 'SELECT * FROM seasons WHERE id = ?1', c.req.param('id'));
   if (!s) throw new HttpError(404, 'Season not found.');
   await db.batch([
     ...(b.isCurrent ? [stmt(db, 'UPDATE seasons SET is_current = 0')] : []),
-    stmt(db, 'UPDATE seasons SET name = ?1, weeks = ?2, is_current = ?3, tiebreakers = ?4 WHERE id = ?5', b.name ?? s.name, b.weeks ?? s.weeks, b.isCurrent ?? !!s.is_current ? 1 : 0, b.tiebreakers ? JSON.stringify(b.tiebreakers) : s.tiebreakers, s.id),
-    log(c, { action: 'season_updated', entity: 'season', entityId: s.id, previous: { name: s.name, weeks: s.weeks, isCurrent: !!s.is_current, tiebreakers: j(s.tiebreakers, []) }, next: b }),
+    stmt(db, 'UPDATE seasons SET name = ?1, weeks = ?2, is_current = ?3 WHERE id = ?4', b.name ?? s.name, b.weeks ?? s.weeks, b.isCurrent ?? !!s.is_current ? 1 : 0, s.id),
+    log(c, { action: 'season_updated', entity: 'season', entityId: s.id, previous: { name: s.name, weeks: s.weeks, isCurrent: !!s.is_current }, next: b }),
   ]);
   return c.json({ ok: true });
 });
@@ -642,7 +642,7 @@ const configSchema = z.object({
 });
 adminRoutes.get('/settings', async (c) => {
   const season = await getSeason(c.env.DB, c.req.query('season'));
-  return c.json({ season: season.id, config: await simConfig(c.env.DB, season.id), aiConfigured: !!c.env.ANTHROPIC_API_KEY, tiebreakers: j(season.tiebreakers, []) });
+  return c.json({ season: season.id, config: await simConfig(c.env.DB, season.id), aiConfigured: !!c.env.ANTHROPIC_API_KEY });
 });
 adminRoutes.put('/settings', async (c) => {
   const b = await body(c, z.object({ seasonId: z.string(), config: configSchema }));

@@ -13,11 +13,11 @@ Defined in `worker/db.ts` and applied automatically. Append new migrations to `M
 | `simulation_runs` | Immutable simulation and import records: seed, snapshot, full result JSON (plays, drives, statistics, highlights, recap, percentage checks, validation). Only `status` may change; rows cannot be deleted. |
 | `published_results` | Version history of official results. A unique index allows one current version per game. |
 | `drives`, `play_events`, `scoring_events`, `player_game_stats`, `team_game_stats`, `highlights` | The official, queryable copy of the current published result for each game. Replaced inside the publish transaction. |
-| `rankings` | AP-style polls, per season and week. Independent of standings. |
+| `rankings` | AP-style polls, per season and week. |
 | `audit_logs` | Append-only record of every administrative action with previous value, new value and reason. |
 | `settings` | Key/value (external percentage endpoint). |
 
-**Aggregates are never stored.** Records, standings, season and career statistics and leaderboards are computed by
+**Aggregates are never stored.** Team records, season and career statistics and leaderboards are computed by
 SQL over the official tables, restricted to games that are final, published and past any replay. Publishing, correcting
 or withdrawing a game therefore updates every total at once and cannot double-count.
 

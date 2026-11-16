@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { passerRating } from '../engine/stats';
 import { HttpError, type AppEnv } from './auth';
 import { PLAYER_STAT_COLS, TEAM_STAT_COLS, all, first, j, now, type DB } from './db';
-import { getSeason, logoUrl, publicGames, ranks, records, recordText, standings, teamsForSeason, type GameRow, type SeasonRow, type TeamRow } from './league';
+import { getSeason, logoUrl, publicGames, ranks, records, recordText, teamsForSeason, type GameRow, type SeasonRow, type TeamRow } from './league';
 
 export const publicRoutes = new Hono<AppEnv>();
 
@@ -135,23 +135,6 @@ publicRoutes.get('/games/:id', async (c) => {
       playerStats: playerStats.map((p) => ({ ...derive(p), lockedFields: j(p.locked_fields, []), locked_fields: undefined })),
       recap: j(run?.recap, null), publishedAt: run?.published_at ?? null, version: run?.version ?? 1,
     },
-  });
-});
-
-publicRoutes.get('/standings', async (c) => {
-  const { season, teams, rec } = await ctx(c.env.DB, c.req.query('season'));
-  const rk = await ranks(c.env.DB, season.id, null);
-  const tm = new Map(teams.map((t) => [t.id, t]));
-  const tiebreakers = j<string[]>(season.tiebreakers, []);
-  return c.json({
-    season: season.id, tiebreakers,
-    conferences: standings(teams, rec, tiebreakers).map((cf) => ({
-      ...cf,
-      rows: cf.rows.map((r) => {
-        const t = tm.get(r.teamId)!;
-        return { ...r, team: { id: t.id, name: t.name, short: t.short_name, abbr: t.abbr, color: t.primary_color, color2: t.secondary_color, logo: logoUrl(t), rank: rk.map.get(t.id) ?? null } };
-      }),
-    })),
   });
 });
 
