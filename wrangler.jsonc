@@ -1,0 +1,33 @@
+{
+  // MCAA Football Engine — Cloudflare Worker (API) + static React site + D1 database.
+  // Import this repo in the Cloudflare dashboard (Workers & Pages → Create → Import a repository).
+  //   Build command:  (leave empty)
+  //   Deploy command: npx wrangler deploy
+  // The D1 database below has no database_id on purpose: Wrangler provisions it automatically on
+  // the first deploy, and the Worker creates/migrates its own tables on the first request.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mcaa-football",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Wrangler builds the React site itself before every deploy, so "npx wrangler deploy" is the only command Cloudflare needs.
+  "build": { "command": "npm run build", "watch_dir": "src" },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "mcaa-football-db" }
+  ],
+  "observability": { "enabled": true },
+  "vars": {
+    // Optional external percentage source (see docs/PERCENTAGES.md). Leave empty to use CSV/JSON imports.
+    "PERCENTAGE_API_URL": ""
+  }
+  // Secrets (set in the dashboard or with `wrangler secret put`):
+  //   SETUP_TOKEN            required once, to create the four administrator accounts at /setup
+  //   ANTHROPIC_API_KEY      optional, enables AI recaps and screenshot reading
+  //   PERCENTAGE_API_TOKEN   optional, bearer token for PERCENTAGE_API_URL
+}
