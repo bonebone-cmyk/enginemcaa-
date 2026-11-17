@@ -24,7 +24,7 @@ export function useTeams() {
 }
 export const weeksOf = (meta: ReturnType<typeof useSeason>['meta']) => [...new Set([...(meta?.weeks ?? []), ...Array.from({ length: meta?.season?.weeks ?? 1 }, (_, i) => i + 1)])].sort((a, b) => a - b);
 
-const Pct = ({ p }: { p: Row | null }) => p ? <span className="text-xs tnum text-ink-200" title="Activity / Upset / Star">{p.activity}<span className="text-ink-500">/</span>{p.upset}<span className="text-ink-500">/</span>{p.star}</span> : <Badge tone="red" title="No percentages in the latest snapshot">none</Badge>;
+const Pct = ({ p }: { p: Row | null }) => p ? <span className="text-xs tnum text-ink-200" title="Activity / Upset / Star">{p.activity}<span className="text-ink-500">/</span>{p.upset}<span className="text-ink-500">/</span>{p.star}</span> : <Badge tone="red" title="No percentages stored for this team">not set</Badge>;
 
 /** Publish dialog: instant or replay presentation; a correction of an official result needs confirmation and a reason. */
 export function PublishDialog({ runId, mode, correction, onClose, onDone }: { runId: string; mode: string; correction: Row | null; onClose: () => void; onDone: () => void }) {
@@ -92,8 +92,7 @@ export function SimulationCenter() {
     // 1. One percentage snapshot for the whole batch.
     let snapId = snapshot;
     try {
-      if (!snapId) snapId = pct.data?.apiUrl ? (await api.post('/admin/percentages/fetch', { seasonId })).snapshot.id : pct.data?.snapshots[0]?.id ?? '';
-      if (!snapId) throw new Error('No percentage snapshot is available. Import team percentages first.');
+      if (!snapId) snapId = (await api.post('/admin/percentages/snapshot', { seasonId })).snapshot.id;
     } catch (e) {
       setBatch(null);
       return setError(e);
@@ -130,9 +129,9 @@ export function SimulationCenter() {
       <div className="flex flex-wrap items-end gap-3">
         <h1 className="font-display text-3xl font-bold uppercase">Simulation Center</h1>
         <Field label="Week" className="ml-auto w-28"><Select value={week} onChange={(e) => setWeek(Number(e.target.value))}>{weeksOf(meta).map((w) => <option key={w} value={w}>Week {w}</option>)}</Select></Field>
-        <Field label="Percentage snapshot" className="w-72">
+        <Field label="Percentages" className="w-72">
           <Select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
-            <option value="">{pct.data?.apiUrl ? 'Fetch current values from the MCAA source' : snaps[0] ? `Latest import (${fmtAgo(snaps[0].fetched_at, pct.data.serverTime)})` : 'No percentages imported'}</option>
+            <option value="">Current team percentages{pct.data ? ` (${pct.data.teams.filter((t: Row) => t.activity != null).length} of ${pct.data.teams.length} teams set)` : ''}</option>
             {snaps.map((s) => <option key={s.id} value={s.id}>{new Date(s.fetched_at).toLocaleString()} · {s.source} · {s.team_count} teams · {fmtAgo(s.fetched_at, pct.data.serverTime)}</option>)}
           </Select>
         </Field>
@@ -141,7 +140,7 @@ export function SimulationCenter() {
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <Check label="Write recaps with AI (falls back to the standard recap if unavailable)" checked={aiRecap && !!settings.data?.aiConfigured} onChange={setAiRecap} disabled={!settings.data?.aiConfigured} />
         {snapshot && <span className="text-amber-200">Using a previously verified snapshot from {fmtAgo(snaps.find((s) => s.id === snapshot)?.fetched_at ?? 0, pct.data?.serverTime)}.</span>}
-        <span className="text-xs text-ink-400">Percentages show as Activity / Upset / Star from the latest snapshot.</span>
+        <span className="text-xs text-ink-400">Percentages show the current Activity / Upset / Star values stored for each team. <Link className="underline" to="/admin/percentages">Edit them</Link>.</span>
       </div>
       <ErrorBox error={error} />
       {batch && (

@@ -1,7 +1,9 @@
-// External percentage integration.
-// The MCAA percentage system is the authority for Activity / Upset / Star. This module never invents a value:
-// it either fetches from a configured endpoint, or validates a CSV/JSON export, and stores an immutable timestamped snapshot.
-import { HttpError, sha256, type AdminUser, type Env } from './auth';
+// Team percentages (Activity / Upset / Star).
+// The current values live in the D1 table `team_percentages`, one row per team per season, and are entered by
+// administrators (directly, or from a CSV/JSON file). This module never invents, defaults or estimates a value.
+// Before a simulation the current values are copied into an immutable, timestamped snapshot; the simulation
+// record points at that snapshot, so later edits never change what a stored game was simulated with.
+import { HttpError, sha256, type AdminUser } from './auth';
 import { all, first, insertRows, j, now, stmt, uid, type DB } from './db';
 import type { TeamRow } from './league';
 
@@ -69,6 +71,7 @@ export function parsePercentages(format: 'csv' | 'json', content: string, teams:
     if (!key) return void errors.push(`${row}: no team column (expected one of: team, abbr, name, id).`);
     const t = byKey.get(key.trim().toLowerCase());
     if (!t) return void errors.push(`${row}: team "${key}" does not match any MCAA team name, short name, abbreviation or id.`);
+    if (!t.in_season) return void errors.push(`${row}: ${t.name} is not entered in this season.`);
     if (seen.has(t.id)) return void errors.push(`${row}: ${t.name} appears more than once.`);
     seen.add(t.id);
     const vals: Record<string, number> = {};
@@ -86,16 +89,36 @@ export function parsePercentages(format: 'csv' | 'json', content: string, teams:
     }
     entries.push({ teamId: t.id, activity: vals.activity, upset: vals.upset, star: vals.star, extra });
   });
-  const missing = teams.filter((t) => t.in_season && !seen.has(t.id));
-  if (missing.length && !errors.length) warnings.push(`No percentages supplied for: ${missing.map((t) => t.name).join(', ')}. Their games cannot be simulated from this snapshot.`);
   return { entries: errors.length ? [] : entries, errors, warnings };
 }
+
+export interface StoredPct { activity: number; upset: number; star: number; extra: Record<string, number> }
+export interface CurrentRow extends StoredPct { teamId: string; updatedAt: number; updatedBy: string | null }
+
+/** The current percentages for a season, as stored in D1. */
+export async function currentPercentages(db: DB, seasonId: string): Promise<Map<string, CurrentRow>> {
+  const rows = await all<{ team_id: string; activity: number; upset: number; star: number; extra: string; updated_at: number; updated_by_name: string | null }>(db, 'SELECT * FROM team_percentages WHERE season_id = ?1', seasonId);
+  return new Map(rows.map((r) => [r.team_id, { teamId: r.team_id, activity: r.activity, upset: r.upset, star: r.star, extra: j(r.extra, {}), updatedAt: r.updated_at, updatedBy: r.updated_by_name }]));
+}
+
+/** Insert or update rows. When `keepExtra` is set, existing extra categories survive an edit that does not supply any. */
+export function upsertPercentagesStmt(db: DB, seasonId: string, entries: PctEntry[], admin: AdminUser | null, keepExtra = true): D1PreparedStatement {
+  const rows = entries.map((e) => ({ teamId: e.teamId, activity: e.activity, upset: e.upset, star: e.star, extra: JSON.stringify(e.extra ?? {}) }));
+  return db.prepare(`INSERT INTO team_percentages (season_id, team_id, activity, upset, star, extra, updated_at, updated_by, updated_by_name)
+      SELECT ?1, json_extract(value, '$.teamId'), json_extract(value, '$.activity'), json_extract(value, '$.upset'), json_extract(value, '$.star'), json_extract(value, '$.extra'), ?3, ?4, ?5
+      FROM json_each(?2) WHERE true
+      ON CONFLICT (season_id, team_id) DO UPDATE SET activity = excluded.activity, upset = excluded.upset, star = excluded.star,
+        extra = ${keepExtra ? "CASE WHEN excluded.extra = '{}' THEN team_percentages.extra ELSE excluded.extra END" : 'excluded.extra'},
+        updated_at = excluded.updated_at, updated_by = excluded.updated_by, updated_by_name = excluded.updated_by_name`)
+    .bind(seasonId, JSON.stringify(rows), now(), admin?.id ?? null, admin?.name ?? null);
+}
+
+const checksumOf = (entries: PctEntry[]) => sha256(JSON.stringify([...entries].sort((a, b) => a.teamId.localeCompare(b.teamId)).map((e) => ({ teamId: e.teamId, activity: e.activity, upset: e.upset, star: e.star, extra: e.extra }))));
 
 export async function saveSnapshot(db: DB, seasonId: string, source: string, detail: string | null, entries: PctEntry[], admin: AdminUser | null): Promise<Snapshot> {
   if (!entries.length) throw new HttpError(422, 'A snapshot needs at least one team.');
   const id = uid();
-  const canonical = JSON.stringify([...entries].sort((a, b) => a.teamId.localeCompare(b.teamId)));
-  const snap: Snapshot = { id, season_id: seasonId, source, source_detail: detail, fetched_at: now(), team_count: entries.length, checksum: await sha256(canonical) };
+  const snap: Snapshot = { id, season_id: seasonId, source, source_detail: detail, fetched_at: now(), team_count: entries.length, checksum: await checksumOf(entries) };
   await db.batch([
     stmt(db, 'INSERT INTO percentage_snapshots (id, season_id, source, source_detail, fetched_at, created_by, checksum, team_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)', id, seasonId, source, detail, snap.fetched_at, admin?.id ?? null, snap.checksum, entries.length),
     insertRows(db, 'percentage_snapshot_entries', ['snapshot_id', 'team_id', 'activity', 'upset', 'star', 'extra'], entries.map((e) => ({ snapshot_id: id, team_id: e.teamId, activity: e.activity, upset: e.upset, star: e.star, extra: e.extra }))),
@@ -103,49 +126,35 @@ export async function saveSnapshot(db: DB, seasonId: string, source: string, det
   return snap;
 }
 
-export async function apiUrl(env: Env, db: DB): Promise<string | null> {
-  const fromSetting = await first<{ value: string }>(db, "SELECT value FROM settings WHERE key = 'percentage_api_url'");
-  const url = (fromSetting?.value || env.PERCENTAGE_API_URL || '').trim();
-  return url || null;
+/**
+ * Freeze the current D1 percentages into a snapshot. If nothing changed since the latest snapshot, that snapshot is
+ * reused, so repeated simulations do not pile up identical copies.
+ */
+export async function snapshotCurrent(db: DB, seasonId: string, admin: AdminUser | null): Promise<Snapshot> {
+  const cur = await currentPercentages(db, seasonId);
+  if (!cur.size) throw new HttpError(422, 'No team percentages are stored for this season. Enter them in Team Percentages before simulating.', { code: 'NO_PERCENTAGES' });
+  const entries: PctEntry[] = [...cur.values()].map((r) => ({ teamId: r.teamId, activity: r.activity, upset: r.upset, star: r.star, extra: r.extra }));
+  const sum = await checksumOf(entries);
+  const latest = await first<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC, id DESC LIMIT 1', seasonId);
+  if (latest && latest.checksum === sum && latest.team_count === entries.length) return latest;
+  return saveSnapshot(db, seasonId, 'database', 'current team percentages', entries, admin);
 }
 
-/** Pull current percentages from the configured external endpoint. Throws 502 when the source cannot be reached or is malformed. */
-export async function fetchExternal(env: Env, db: DB, seasonId: string, teams: TeamRow[], admin: AdminUser | null): Promise<{ snapshot: Snapshot; warnings: string[] }> {
-  const url = await apiUrl(env, db);
-  if (!url) throw new HttpError(400, 'No external percentage endpoint is configured. Import a CSV or JSON export instead, or set the endpoint in Percentage Integration.', { code: 'NO_SOURCE' });
-  let text: string;
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json', ...(env.PERCENTAGE_API_TOKEN ? { Authorization: `Bearer ${env.PERCENTAGE_API_TOKEN}` } : {}) }, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    text = await res.text();
-  } catch (e) {
-    throw new HttpError(502, `The external percentage source is unavailable (${(e as Error).message}). You may select a previously verified snapshot instead.`, { code: 'SOURCE_UNAVAILABLE' });
-  }
-  const parsed = parsePercentages(text.trim().startsWith('{') || text.trim().startsWith('[') ? 'json' : 'csv', text, teams);
-  if (parsed.errors.length) throw new HttpError(502, 'The external percentage source returned data that failed validation.', { code: 'SOURCE_INVALID', details: parsed.errors });
-  return { snapshot: await saveSnapshot(db, seasonId, 'api', url, parsed.entries, admin), warnings: parsed.warnings };
-}
-
-export async function snapshotEntries(db: DB, snapshotId: string): Promise<Map<string, { activity: number; upset: number; star: number; extra: Record<string, number> }>> {
+export async function snapshotEntries(db: DB, snapshotId: string): Promise<Map<string, StoredPct>> {
   const rows = await all<{ team_id: string; activity: number; upset: number; star: number; extra: string }>(db, 'SELECT * FROM percentage_snapshot_entries WHERE snapshot_id = ?1', snapshotId);
   return new Map(rows.map((r) => [r.team_id, { activity: r.activity, upset: r.upset, star: r.star, extra: j(r.extra, {}) }]));
 }
 
 /**
- * Decide which snapshot a simulation uses.
- *  - explicit snapshotId: an administrator deliberately chose a previously verified snapshot (its age is shown in the UI);
- *  - endpoint configured: fetch fresh values now and snapshot them; if the source is down the request fails and the
- *    administrator must choose a snapshot explicitly;
- *  - import-only: the most recent verified import is the current data.
+ * Decide which percentages a simulation uses.
+ *  - explicit snapshotId: an administrator deliberately re-uses an earlier snapshot (its age is shown in the UI);
+ *  - otherwise: the current values stored in D1, frozen into a snapshot now.
  */
-export async function resolveSnapshot(env: Env, db: DB, seasonId: string, teams: TeamRow[], admin: AdminUser, snapshotId?: string | null): Promise<Snapshot> {
+export async function resolveSnapshot(db: DB, seasonId: string, admin: AdminUser, snapshotId?: string | null): Promise<Snapshot> {
   if (snapshotId) {
     const s = await first<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE id = ?1 AND season_id = ?2', snapshotId, seasonId);
     if (!s) throw new HttpError(404, 'That percentage snapshot does not exist for this season.');
     return s;
   }
-  if (await apiUrl(env, db)) return (await fetchExternal(env, db, seasonId, teams, admin)).snapshot;
-  const latest = await first<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC LIMIT 1', seasonId);
-  if (!latest) throw new HttpError(422, 'No team percentages have been imported for this season. Import them in Percentage Integration before simulating.', { code: 'NO_PERCENTAGES' });
-  return latest;
+  return snapshotCurrent(db, seasonId, admin);
 }

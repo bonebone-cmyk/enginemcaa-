@@ -8,66 +8,111 @@ import { useTeams, weeksOf } from './sim';
 
 type Row = Record<string, any>;
 
-// ================================================================== PERCENTAGE INTEGRATION
+// ================================================================== TEAM PERCENTAGES
+type PctDraft = { activity: string; upset: string; star: string };
+const PCT_KEYS = ['activity', 'upset', 'star'] as const;
+const asDraft = (t: Row): PctDraft => ({ activity: t.activity == null ? '' : String(t.activity), upset: t.upset == null ? '' : String(t.upset), star: t.star == null ? '' : String(t.star) });
+const pctError = (v: string) => (v.trim() === '' ? 'empty' : Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100 ? null : 'range');
+
 export function Percentages() {
   const { seasonId } = useSeason();
   const team = useTeams();
   const [view, setView] = useState('');
   const q = useApi<any>(`/admin/percentages${qs({ season: seasonId, snapshot: view })}`);
+  const [draft, setDraft] = useState<Record<string, PctDraft>>({});
   const [format, setFormat] = useState<'csv' | 'json'>('csv');
   const [content, setContent] = useState('team,activity,upset,star\n');
   const [preview, setPreview] = useState<Row | null>(null);
-  const [url, setUrl] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [saved, setSaved] = useState('');
   const act = useAction();
-  const src = useAction();
-  useEffect(() => { if (q.data && url === null) setUrl(q.data.apiUrl ?? ''); }, [q.data, url]);
+  const save = useAction();
+  useEffect(() => { if (q.data) setDraft(Object.fromEntries(q.data.teams.map((t: Row) => [t.teamId, asDraft(t)]))); }, [q.data]);
+
+  const rows: Row[] = q.data ? [...q.data.teams].sort((a: Row, b: Row) => team(a.teamId).name.localeCompare(team(b.teamId).name)) : [];
+  const changed = rows.filter((t) => { const d = draft[t.teamId]; return d && PCT_KEYS.some((k) => d[k] !== asDraft(t)[k]); });
+  const invalid = changed.filter((t) => { const d = draft[t.teamId]; const blank = PCT_KEYS.every((k) => d[k].trim() === ''); return !blank && PCT_KEYS.some((k) => pctError(d[k])); });
+  const setCell = (teamId: string, k: (typeof PCT_KEYS)[number], v: string) => { setSaved(''); setDraft((d) => ({ ...d, [teamId]: { ...d[teamId], [k]: v.replace(/[^0-9.]/g, '') } })); };
+  const saveAll = () => save.run(async () => {
+    const set = changed.filter((t) => !PCT_KEYS.every((k) => draft[t.teamId][k].trim() === '')).map((t) => ({ teamId: t.teamId, activity: Number(draft[t.teamId].activity), upset: Number(draft[t.teamId].upset), star: Number(draft[t.teamId].star) }));
+    const clear = changed.filter((t) => PCT_KEYS.every((k) => draft[t.teamId][k].trim() === '')).map((t) => t.teamId);
+    if (clear.length && !confirm(`Remove the stored percentages for ${clear.map((id) => team(id).name).join(', ')}? Their games cannot be simulated until new values are entered.`)) return;
+    const r = await api.put('/admin/percentages', { seasonId, set, clear });
+    setSaved(`Saved ${set.length + clear.length} team${set.length + clear.length === 1 ? '' : 's'}.${r.coverage.missing.length ? ` Still missing: ${r.coverage.missing.join(', ')}.` : ''}`);
+    q.reload();
+  });
   const send = (dryRun: boolean) => act.run(async () => {
     const r = await api.post('/admin/percentages/import', { seasonId, format, content, dryRun });
     setWarnings(r.warnings ?? []);
-    if (dryRun) setPreview(r); else { setPreview(null); setView(''); q.reload(); }
+    if (dryRun) setPreview(r); else { setPreview(null); q.reload(); }
   });
+  const missing = rows.filter((t) => t.activity == null).length;
+
   return (
     <div className="space-y-4">
-      <h1 className="font-display text-3xl font-bold uppercase">Percentage Integration</h1>
+      <h1 className="font-display text-3xl font-bold uppercase">Team Percentages</h1>
       <Notice>
-        <p><b>The MCAA percentage system is the authority.</b> This site never invents, defaults or estimates a percentage. Each simulation uses one timestamped, immutable snapshot, and every Activity, Upset and Star check is rolled separately and recorded.</p>
+        <p><b>Percentages are stored in the league database and set here by administrators.</b> They are never invented, defaulted or estimated: a team without values cannot be simulated. When a game is simulated, the current values are frozen into a snapshot that the result keeps, so later edits never change a stored game. Activity, Upset and Star are rolled separately and recorded.</p>
         <ul className="mt-1 list-disc pl-5"><li><b>Activity</b> — preparedness. One check per team per quarter: sharper or flatter execution, penalties and fumbles.</li><li><b>Upset</b> — underdog potential. One check per team per half: an underdog closes part of the rating gap and forces more turnovers. It never helps a favorite.</li><li><b>Star</b> — individual brilliance. One check per featured player: more touches and bigger plays for that player only.</li></ul>
       </Notice>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Direct connection (optional)">
-          <p className="mb-2 text-sm text-ink-300">If the MCAA percentage system exposes an HTTPS endpoint that returns JSON or CSV with <code>team, activity, upset, star</code>, enter it here. Fresh values are then fetched and snapshotted before every simulation. If the endpoint is down, simulations stop until you explicitly choose a previously verified snapshot. An access token, if required, goes in the Worker secret <code>PERCENTAGE_API_TOKEN</code>.</p>
-          <div className="flex gap-2"><Input value={url ?? ''} onChange={(e) => setUrl(e.target.value)} placeholder="https://… (leave empty to use imports only)" /><Button busy={src.busy} onClick={() => src.run(async () => { await api.put('/admin/percentages/source', { url: url ?? '' }); q.reload(); })}>Save</Button></div>
-          <div className="mt-2 flex items-center gap-2"><Button variant="primary" disabled={!q.data?.apiUrl} busy={src.busy} onClick={() => src.run(async () => { const r = await api.post('/admin/percentages/fetch', { seasonId }); setWarnings(r.warnings ?? []); setView(''); q.reload(); })}>Fetch now</Button><span className="text-xs text-ink-400">{q.data?.apiUrl ? `Connected to ${q.data.apiUrl}` : 'No endpoint configured — using CSV / JSON imports.'}</span></div>
-          <ErrorBox className="mt-2" error={src.error} />
-        </Card>
-        <Card title="Import an export file">
-          <div className="mb-2 flex gap-2"><Select className="!w-28" value={format} onChange={(e) => { setFormat(e.target.value as 'csv' | 'json'); setPreview(null); }}><option value="csv">CSV</option><option value="json">JSON</option></Select>
-            <input type="file" accept=".csv,.json,.txt" className="text-xs" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setContent(await f.text()); setFormat(f.name.endsWith('.json') ? 'json' : 'csv'); setPreview(null); } }} /></div>
-          <Textarea rows={7} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null); }} spellCheck={false} placeholder={format === 'csv' ? 'team,activity,upset,star\nTUL,85,35,70' : '[{"team":"TUL","activity":85,"upset":35,"star":70}]'} />
-          <p className="mt-1 text-xs text-ink-400">Teams may be identified by name, short name, abbreviation or id. Values are 0–100. Extra numeric columns are stored as additional categories for future use. Any invalid row rejects the whole file.</p>
-          <ErrorBox className="mt-2" error={act.error} />
-          {warnings.map((w) => <Notice key={w} tone="warn" className="mt-2">{w}</Notice>)}
-          {preview && <Notice tone="ok" className="mt-2">Valid: {preview.entries.length} teams. Review the values, then save the snapshot.
-            <span className="mt-1 block text-xs">{preview.entries.map((e: Row) => `${team(e.teamId).abbr} ${e.activity}/${e.upset}/${e.star}`).join(' · ')}</span></Notice>}
-          <div className="mt-2 flex gap-2"><Button busy={act.busy} onClick={() => send(true)}>Validate</Button><Button variant="primary" busy={act.busy} disabled={!preview} onClick={() => send(false)}>Save snapshot</Button></div>
-        </Card>
-      </div>
       <Load q={q}>{(d) => (
-        <div className="grid gap-4 lg:grid-cols-[22rem_1fr]">
-          <Card title="Snapshots" pad={false}>
-            {d.snapshots.length ? <ul className="max-h-96 divide-y divide-ink-800 overflow-y-auto">{d.snapshots.map((s: Row, i: number) => (
-              <li key={s.id}><button onClick={() => setView(s.id)} className={cx('block w-full px-3 py-2 text-left text-sm hover:bg-ink-800', d.viewing === s.id && 'bg-ink-800')}>
-                <span className="flex items-center gap-2"><b>{new Date(s.fetched_at).toLocaleString()}</b>{i === 0 && <Badge tone="green">Latest</Badge>}</span>
-                <span className="text-xs text-ink-400">{s.source}{s.source_detail ? ` · ${s.source_detail}` : ''} · {s.team_count} teams · {fmtAgo(s.fetched_at, d.serverTime)} · checksum {s.checksum.slice(0, 8)}</span>
-              </button></li>))}</ul> : <Empty>No snapshots yet. Games cannot be simulated until percentages are imported.</Empty>}
+        <>
+          <Card title={`Current percentages (${rows.length - missing} of ${rows.length} teams set)`} pad={false}
+            action={<span className="flex items-center gap-2">{changed.length > 0 && <Button size="sm" variant="ghost" onClick={() => { setDraft(Object.fromEntries(rows.map((t) => [t.teamId, asDraft(t)]))); setSaved(''); }}>Discard</Button>}<Button size="sm" variant="primary" busy={save.busy} disabled={!changed.length || invalid.length > 0} onClick={saveAll}>Save {changed.length ? `${changed.length} change${changed.length === 1 ? '' : 's'}` : 'changes'}</Button></span>}>
+            {rows.length ? (
+              <div className="scroll-x"><table className="w-full min-w-[640px]">
+                <thead><tr className="border-b border-ink-700"><th className={th}>Team</th>{PCT_KEYS.map((k) => <th key={k} className={thr}>{k}</th>)}<th className={th}>Last changed</th></tr></thead>
+                <tbody>{rows.map((t) => {
+                  const dr = draft[t.teamId] ?? asDraft(t);
+                  const isChanged = changed.includes(t);
+                  return (
+                    <tr key={t.teamId} className={cx('border-b border-ink-800 last:border-0', isChanged && 'bg-gold/5')}>
+                      <td className={td}><span className="flex items-center gap-2"><TeamLogo team={team(t.teamId)} size={20} />{team(t.teamId).name}{t.activity == null && !isChanged && <Badge tone="red">Not set</Badge>}</span></td>
+                      {PCT_KEYS.map((k) => {
+                        const blankRow = PCT_KEYS.every((x) => dr[x].trim() === '');
+                        const err = !blankRow && pctError(dr[k]);
+                        return <td key={k} className={cx(td, 'text-right')}><span className="inline-flex items-center gap-1"><Input aria-label={`${team(t.teamId).name} ${k}`} inputMode="decimal" className={cx('!w-20 text-right tnum', err && '!border-red-500')} value={dr[k]} onChange={(e) => setCell(t.teamId, k, e.target.value)} /><span className="text-ink-400">%</span></span></td>;
+                      })}
+                      <td className={cx(td, 'text-xs text-ink-400')}>{t.updatedAt ? `${fmtAgo(t.updatedAt, d.serverTime)}${t.updatedBy ? ` · ${t.updatedBy}` : ''}` : '—'}</td>
+                    </tr>);
+                })}</tbody>
+              </table></div>
+            ) : <Empty>No teams are entered in this season yet. Add them in Team Manager.</Empty>}
+            <div className="space-y-2 border-t border-ink-700 px-3 py-2">
+              <p className="text-xs text-ink-400">Each value is 0–100. Fill in all three for a team, or clear all three to remove its values.</p>
+              {invalid.length > 0 && <p className="text-xs text-red-300">Check {invalid.map((t) => team(t.teamId).name).join(', ')}: every value must be a number from 0 to 100, and all three must be filled in.</p>}
+              <ErrorBox error={save.error} />
+              {saved && <Notice tone="ok">{saved}</Notice>}
+            </div>
           </Card>
-          <Card title="Snapshot contents" pad={false}>
-            {d.entries.length ? <table className="w-full"><thead><tr className="border-b border-ink-700"><th className={th}>Team</th><th className={thr}>Activity</th><th className={thr}>Upset</th><th className={thr}>Star</th><th className={th}>Other categories</th></tr></thead>
-              <tbody>{[...d.entries].sort((a: Row, b: Row) => team(a.teamId).name.localeCompare(team(b.teamId).name)).map((e: Row) => (
-                <tr key={e.teamId} className="border-b border-ink-800 last:border-0"><td className={td}><span className="flex items-center gap-2"><TeamLogo team={team(e.teamId)} size={20} />{team(e.teamId).name}</span></td><td className={tdr}>{e.activity}%</td><td className={tdr}>{e.upset}%</td><td className={tdr}>{e.star}%</td><td className={cx(td, 'text-xs text-ink-400')}>{Object.entries(e.extra).map(([k, v]) => `${k} ${v}%`).join(', ')}</td></tr>))}</tbody></table> : <Empty>Select a snapshot to see its values.</Empty>}
-          </Card>
-        </div>)}</Load>
+
+          <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
+            <Card title="Import from a file (optional)">
+              <div className="mb-2 flex gap-2"><Select className="!w-28" value={format} onChange={(e) => { setFormat(e.target.value as 'csv' | 'json'); setPreview(null); }}><option value="csv">CSV</option><option value="json">JSON</option></Select>
+                <input type="file" accept=".csv,.json,.txt" className="text-xs" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setContent(await f.text()); setFormat(f.name.endsWith('.json') ? 'json' : 'csv'); setPreview(null); } }} /></div>
+              <Textarea rows={6} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null); }} spellCheck={false} placeholder={format === 'csv' ? 'team,activity,upset,star\nTUL,85,35,70' : '[{"team":"TUL","activity":85,"upset":35,"star":70}]'} />
+              <p className="mt-1 text-xs text-ink-400">Updates the teams listed in the file; other teams keep their values. Teams may be identified by name, short name, abbreviation or id. Extra numeric columns are stored as additional categories for future use. Any invalid row rejects the whole file.</p>
+              <ErrorBox className="mt-2" error={act.error} />
+              {warnings.map((w) => <Notice key={w} tone="warn" className="mt-2">{w}</Notice>)}
+              {preview && <Notice tone="ok" className="mt-2">Valid: {preview.entries.length} teams. Review the values, then save them.
+                <span className="mt-1 block text-xs">{preview.entries.map((e: Row) => `${team(e.teamId).abbr} ${e.activity}/${e.upset}/${e.star}`).join(' · ')}</span></Notice>}
+              <div className="mt-2 flex gap-2"><Button busy={act.busy} onClick={() => send(true)}>Validate</Button><Button variant="primary" busy={act.busy} disabled={!preview || changed.length > 0} title={changed.length ? 'Save or discard the edits above first' : undefined} onClick={() => send(false)}>Save to database</Button></div>
+            </Card>
+            <Card title="Snapshots used by simulations" pad={false}>
+              {d.snapshots.length ? <ul className="max-h-80 divide-y divide-ink-800 overflow-y-auto">{d.snapshots.map((s: Row, i: number) => (
+                <li key={s.id}><button onClick={() => setView(view === s.id ? '' : s.id)} className={cx('block w-full px-3 py-2 text-left text-sm hover:bg-ink-800', d.viewing === s.id && 'bg-ink-800')}>
+                  <span className="flex items-center gap-2"><b>{new Date(s.fetched_at).toLocaleString()}</b>{i === 0 && <Badge tone="green">Latest</Badge>}</span>
+                  <span className="text-xs text-ink-400">{s.team_count} teams · {fmtAgo(s.fetched_at, d.serverTime)} · checksum {s.checksum.slice(0, 8)}</span>
+                </button></li>))}</ul> : <Empty>No game has been simulated yet. A snapshot is taken automatically the first time one is.</Empty>}
+            </Card>
+          </div>
+          {d.viewing && (
+            <Card title={`Snapshot from ${new Date(d.snapshots.find((s: Row) => s.id === d.viewing)?.fetched_at ?? 0).toLocaleString()} (read-only)`} pad={false} action={<Button size="sm" variant="ghost" onClick={() => setView('')}>Close</Button>}>
+              <table className="w-full"><thead><tr className="border-b border-ink-700"><th className={th}>Team</th><th className={thr}>Activity</th><th className={thr}>Upset</th><th className={thr}>Star</th><th className={th}>Other categories</th></tr></thead>
+                <tbody>{[...d.entries].sort((a: Row, b: Row) => team(a.teamId).name.localeCompare(team(b.teamId).name)).map((e: Row) => (
+                  <tr key={e.teamId} className="border-b border-ink-800 last:border-0"><td className={td}><span className="flex items-center gap-2"><TeamLogo team={team(e.teamId)} size={20} />{team(e.teamId).name}</span></td><td className={tdr}>{e.activity}%</td><td className={tdr}>{e.upset}%</td><td className={tdr}>{e.star}%</td><td className={cx(td, 'text-xs text-ink-400')}>{Object.entries(e.extra).map(([k, v]) => `${k} ${v}%`).join(', ')}</td></tr>))}</tbody></table>
+            </Card>)}
+        </>)}</Load>
     </div>
   );
 }

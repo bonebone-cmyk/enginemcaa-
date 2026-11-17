@@ -21,13 +21,9 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "mcaa-football-db" }
   ],
-  "observability": { "enabled": true },
-  "vars": {
-    // Optional external percentage source (see docs/PERCENTAGES.md). Leave empty to use CSV/JSON imports.
-    "PERCENTAGE_API_URL": ""
-  }
+  "observability": { "enabled": true }
+  // Team percentages are stored in the D1 database above and edited in the admin dashboard; no percentage API is used.
   // Secrets (set in the dashboard or with `wrangler secret put`):
-  //   SETUP_TOKEN            required once, to create the four administrator accounts at /setup
-  //   ANTHROPIC_API_KEY      optional, enables AI recaps and screenshot reading
-  //   PERCENTAGE_API_TOKEN   optional, bearer token for PERCENTAGE_API_URL
+  //   SETUP_TOKEN         required once, to create the four administrator accounts at /setup
+  //   ANTHROPIC_API_KEY   optional, enables AI recaps and screenshot reading
 }

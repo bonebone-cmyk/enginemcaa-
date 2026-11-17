@@ -3,5 +3,3 @@
 SETUP_TOKEN=
 # Optional: enables AI-written recaps and CFB 27 screenshot reading.
 ANTHROPIC_API_KEY=
-# Optional: bearer token sent to PERCENTAGE_API_URL.
-PERCENTAGE_API_TOKEN=

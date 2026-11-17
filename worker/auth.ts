@@ -12,8 +12,6 @@ export interface Env {
   ASSETS: Fetcher;
   SETUP_TOKEN?: string;
   ANTHROPIC_API_KEY?: string;
-  PERCENTAGE_API_URL?: string;
-  PERCENTAGE_API_TOKEN?: string;
 }
 export interface AdminUser {
   id: string;

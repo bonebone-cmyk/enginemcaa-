@@ -67,7 +67,10 @@ export async function seedLeague(admin: Client, abbrs = ['AAA', 'BBB', 'CCC', 'D
   }
   const pct = await admin.post('/admin/percentages/import', { seasonId: season, format: 'csv', content: ['team,activity,upset,star', ...abbrs.map((a, i) => `${a},${60 + i * 5},${30 + i * 5},${40 + i * 3}`)].join('\n') });
   if (pct.status !== 201) throw new Error(`pct import failed: ${JSON.stringify(pct.json)}`);
-  return { season, confs, teams, players, snapshotId: pct.json.snapshot.id as string };
+  // Freeze the starting values so later tests can re-simulate against exactly these numbers.
+  const snap = await admin.post('/admin/percentages/snapshot', { seasonId: season });
+  if (snap.status !== 201) throw new Error(`snapshot failed: ${JSON.stringify(snap.json)}`);
+  return { season, confs, teams, players, snapshotId: snap.json.snapshot.id as string };
 }
 
 export async function addGame(admin: Client, season: string, week: number, away: string, home: string, extra: Record<string, unknown> = {}) {

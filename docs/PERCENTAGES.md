@@ -1,7 +1,9 @@
 # MCAA percentages: what each one means and exactly what it does
 
-The external MCAA percentage system is the authority. This application stores what it is given in immutable,
-timestamped snapshots and never invents, defaults, averages or estimates a value.
+Team percentages are stored in the app's own Cloudflare D1 database (table `team_percentages`, one row per team per
+season) and are entered by the league's administrators on the **Team Percentages** page, either directly in a table or by
+importing a CSV/JSON file. There is no external percentage service and nothing to configure at deployment. The app never
+invents, defaults, averages or estimates a value.
 
 ## The rule
 
@@ -39,20 +41,25 @@ A single game can have all three in play at once; they reach the scoreboard thro
 
 Before every simulation the server:
 
-1. resolves the percentages — fetches the configured endpoint, or uses the latest verified import, or the snapshot an
-   administrator explicitly chose;
-2. validates them (every value present, numeric, 0–100; every team recognised; no duplicates);
-3. stores a snapshot with timestamp, source, source detail and checksum (database triggers forbid editing it);
-4. simulates from that snapshot and stores the snapshot id on the simulation record;
-5. stores every individual check — category, team, scope, percentage, roll, pass/fail, effect — in the result.
+1. reads the current values for the season from `team_percentages` (or, if an administrator explicitly chose one, an
+   earlier snapshot — its age is shown in the Simulation Center and on the review page);
+2. freezes them into a snapshot with timestamp and checksum (database triggers forbid editing it). If nothing has
+   changed since the latest snapshot, that snapshot is reused instead of copied;
+3. simulates from that snapshot and stores the snapshot id on the simulation record;
+4. stores every individual check — category, team, scope, percentage, roll, pass/fail, effect — in the result.
 
-If the endpoint is unreachable or returns invalid data the simulation fails with `SOURCE_UNAVAILABLE` /
-`SOURCE_INVALID`. An administrator may then pick an earlier snapshot; its age is shown in the Simulation Center and on
-the review page. A team with no entry in the chosen snapshot cannot be simulated (`MISSING_PERCENTAGES`).
+Editing a team's percentages afterwards affects only future simulations; a stored result always keeps the values it was
+simulated with. Simulate Week takes one snapshot and uses it for every game in the batch.
+
+Values are validated when they are saved (numeric, 0–100, all three present, team entered in the season) and the
+database rejects anything outside 0–100. A team with no stored values cannot be simulated (`MISSING_PERCENTAGES`).
+Every change is written to the audit log with the previous and new values.
 
 Results Review → "Percentages & seed" shows the source values, the snapshot time, every roll, the seed and the effects.
 
 ## Import formats
+
+Importing updates the teams listed in the file and leaves every other team's values as they are.
 
 CSV (comma, semicolon or tab; `%` signs allowed):
 
@@ -69,7 +76,7 @@ JSON — an array, or an object with `teams` / `percentages` / `data`, or an obj
 ```
 
 Teams are matched by id, abbreviation, short name or full name. Any extra numeric column (for example `morale`) is
-stored with the snapshot as an additional category so future categories can be added without a data migration; the
+stored with the team as an additional category so future categories can be added without a data migration; the
 engine ignores categories it has no rule for.
 
 ## CFB 27 primetime games

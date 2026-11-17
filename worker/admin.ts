@@ -7,7 +7,7 @@ import { aiRecap, extractScreenshots } from './ai';
 import { HttpError, auditStmt, type AdminUser, type AppEnv } from './auth';
 import { all, assertStmt, clearAssert, first, j, now, stmt, uid, type DB } from './db';
 import { getSeason, ranks, records, roster, simConfig, teamInput, teamsForSeason, toRosterPlayers, type GameRow, type SeasonRow } from './league';
-import { apiUrl, fetchExternal, parseCsv, parsePercentages, resolveSnapshot, saveSnapshot, snapshotEntries, type Snapshot } from './percent';
+import { currentPercentages, parseCsv, parsePercentages, resolveSnapshot, snapshotCurrent, snapshotEntries, upsertPercentagesStmt, type Snapshot } from './percent';
 import { publishRun, unpublishGame } from './publish';
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -269,8 +269,7 @@ adminRoutes.get('/games', async (c) => {
   const games = await all<GameRow>(db, `SELECT * FROM games WHERE season_id = ?1 ${week ? 'AND week = ?2' : ''} ORDER BY week, COALESCE(kickoff_at, 9e15), created_at`, ...(week ? [season.id, Number(week)] : [season.id]));
   const runs = await all<{ id: string; game_id: string; status: string; mode: string; valid: number; away_score: number; home_score: number; created_at: number; seed: string }>(db,
     `SELECT r.id, r.game_id, r.status, r.mode, r.valid, r.away_score, r.home_score, r.created_at, r.seed FROM simulation_runs r JOIN games g ON g.id = r.game_id WHERE g.season_id = ?1 AND r.status IN ('candidate','approved','published') ORDER BY r.created_at`, season.id);
-  const latest = await first<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC LIMIT 1', season.id);
-  const pct = latest ? await snapshotEntries(db, latest.id) : new Map();
+  const pct = await currentPercentages(db, season.id);
   const rec = await records(db, season.id, now());
   // Show the result awaiting review/publication if there is one, otherwise the published one.
   const byGame = new Map<string, (typeof runs)[number]>();
@@ -279,7 +278,7 @@ adminRoutes.get('/games', async (c) => {
     if (!cur || r.status !== 'published' || cur.status === 'published') byGame.set(r.game_id, r);
   }
   return c.json({
-    season: season.id, snapshot: latest,
+    season: season.id,
     games: games.map((g) => ({
       ...g, designations: j(g.designations, []), run: byGame.get(g.id) ?? null,
       awayPct: pct.get(g.away_team_id) ?? null, homePct: pct.get(g.home_team_id) ?? null,
@@ -349,40 +348,84 @@ adminRoutes.post('/games/:id/unpublish', async (c) => {
 });
 
 // ---------------------------------------------------------------------------------- percentages
+// Team percentages are stored in D1 (`team_percentages`) and managed here. There is no external source.
+const pctValue = z.number({ message: 'Percentages must be numbers.' }).finite().min(0, 'Percentages cannot be below 0.').max(100, 'Percentages cannot be above 100.');
+
+/** Teams missing percentages after a change, so the UI can warn before anyone tries to simulate. */
+async function pctCoverage(db: DB, seasonId: string) {
+  const teams = await teamsForSeason(db, seasonId, true);
+  const cur = await currentPercentages(db, seasonId);
+  return { total: teams.length, set: teams.filter((t) => cur.has(t.id)).length, missing: teams.filter((t) => !cur.has(t.id)).map((t) => t.name) };
+}
+
 adminRoutes.get('/percentages', async (c) => {
   const db = c.env.DB;
   const season = await getSeason(db, c.req.query('season'));
-  const snapshots = await all<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC LIMIT 50', season.id);
-  const view = c.req.query('snapshot') ?? snapshots[0]?.id;
+  const teams = await teamsForSeason(db, season.id, true);
+  const cur = await currentPercentages(db, season.id);
+  const snapshots = await all<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC, id DESC LIMIT 50', season.id);
+  const view = c.req.query('snapshot') || null;
   const entries = view ? [...(await snapshotEntries(db, view)).entries()].map(([teamId, v]) => ({ teamId, ...v })) : [];
-  return c.json({ season: season.id, apiUrl: await apiUrl(c.env, db), apiUrlFromEnv: !!c.env.PERCENTAGE_API_URL, snapshots, viewing: view ?? null, entries, serverTime: now() });
+  return c.json({
+    season: season.id,
+    teams: teams.map((t) => { const r = cur.get(t.id); return { teamId: t.id, activity: r?.activity ?? null, upset: r?.upset ?? null, star: r?.star ?? null, extra: r?.extra ?? {}, updatedAt: r?.updatedAt ?? null, updatedBy: r?.updatedBy ?? null }; }),
+    snapshots, viewing: view, entries, serverTime: now(),
+  });
 });
+
+adminRoutes.put('/percentages', async (c) => {
+  const b = await body(c, z.object({
+    seasonId: z.string(),
+    set: z.array(z.object({ teamId: z.string(), activity: pctValue, upset: pctValue, star: pctValue })).max(500).default([]),
+    clear: z.array(z.string()).max(500).default([]),
+  }));
+  const db = c.env.DB;
+  if (!b.set.length && !b.clear.length) throw new HttpError(422, 'There are no changes to save.');
+  const inSeason = new Set((await teamsForSeason(db, b.seasonId, true)).map((t) => t.id));
+  const ids = [...b.set.map((x) => x.teamId), ...b.clear];
+  if (new Set(ids).size !== ids.length) throw new HttpError(422, 'A team appears more than once in this change.');
+  const bad = ids.filter((id) => !inSeason.has(id));
+  if (bad.length) throw new HttpError(422, 'Percentages can only be set for teams entered in this season.', { details: bad });
+  const before = await currentPercentages(db, b.seasonId);
+  const pick = (id: string) => { const r = before.get(id); return r ? { activity: r.activity, upset: r.upset, star: r.star } : null; };
+  await db.batch([
+    ...(b.set.length ? [upsertPercentagesStmt(db, b.seasonId, b.set.map((x) => ({ ...x, extra: {} })), c.get('admin'))] : []),
+    ...b.clear.map((id) => stmt(db, 'DELETE FROM team_percentages WHERE season_id = ?1 AND team_id = ?2', b.seasonId, id)),
+    log(c, {
+      action: 'percentages_updated', entity: 'team_percentages', entityId: b.seasonId,
+      previous: Object.fromEntries(ids.map((id) => [id, pick(id)])),
+      next: Object.fromEntries([...b.set.map((x) => [x.teamId, { activity: x.activity, upset: x.upset, star: x.star }]), ...b.clear.map((id) => [id, null])]),
+    }),
+  ]);
+  return c.json({ ok: true, coverage: await pctCoverage(db, b.seasonId) });
+});
+
 adminRoutes.post('/percentages/import', async (c) => {
-  const b = await body(c, z.object({ seasonId: z.string(), format: z.enum(['csv', 'json']), content: z.string().min(1).max(500_000), sourceDetail: z.string().max(200).optional(), dryRun: z.boolean().default(false) }));
+  const b = await body(c, z.object({ seasonId: z.string(), format: z.enum(['csv', 'json']), content: z.string().min(1).max(500_000), dryRun: z.boolean().default(false) }));
   const db = c.env.DB;
   const teams = await teamsForSeason(db, b.seasonId);
   const parsed = parsePercentages(b.format, b.content, teams);
   if (parsed.errors.length) throw new HttpError(422, 'The percentage file failed validation. Nothing was saved.', { details: parsed.errors });
   if (b.dryRun) return c.json({ ok: true, entries: parsed.entries, warnings: parsed.warnings });
-  const snap = await saveSnapshot(db, b.seasonId, b.format, b.sourceDetail ?? 'manual import', parsed.entries, c.get('admin'));
-  await log(c, { action: 'percentages_imported', entity: 'percentage_snapshot', entityId: snap.id, next: { format: b.format, teams: parsed.entries.length, checksum: snap.checksum } }).run();
-  return c.json({ snapshot: snap, warnings: parsed.warnings }, 201);
-});
-adminRoutes.post('/percentages/fetch', async (c) => {
-  const b = await body(c, z.object({ seasonId: z.string() }));
-  const teams = await teamsForSeason(c.env.DB, b.seasonId);
-  const res = await fetchExternal(c.env, c.env.DB, b.seasonId, teams, c.get('admin'));
-  await log(c, { action: 'percentages_fetched', entity: 'percentage_snapshot', entityId: res.snapshot.id, next: { source: res.snapshot.source_detail, teams: res.snapshot.team_count } }).run();
-  return c.json(res, 201);
-});
-adminRoutes.put('/percentages/source', async (c) => {
-  const b = await body(c, z.object({ url: z.string().trim().max(500).refine((u) => u === '' || /^https:\/\/\S+$/.test(u), 'The endpoint must be an https:// URL.') }));
-  const prev = await apiUrl(c.env, c.env.DB);
-  await c.env.DB.batch([
-    stmt(c.env.DB, "INSERT INTO settings (key, value, updated_at) VALUES ('percentage_api_url', ?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", b.url, now()),
-    log(c, { action: 'percentage_source_changed', entity: 'settings', previous: { url: prev }, next: { url: b.url } }),
+  const before = await currentPercentages(db, b.seasonId);
+  // Teams in the file are updated; teams not in the file keep their stored values.
+  await db.batch([
+    upsertPercentagesStmt(db, b.seasonId, parsed.entries, c.get('admin')),
+    log(c, {
+      action: 'percentages_imported', entity: 'team_percentages', entityId: b.seasonId,
+      previous: Object.fromEntries(parsed.entries.map((e) => { const r = before.get(e.teamId); return [e.teamId, r ? { activity: r.activity, upset: r.upset, star: r.star } : null]; })),
+      next: { format: b.format, teams: Object.fromEntries(parsed.entries.map((e) => [e.teamId, { activity: e.activity, upset: e.upset, star: e.star }])) },
+    }),
   ]);
-  return c.json({ ok: true });
+  const coverage = await pctCoverage(db, b.seasonId);
+  const warnings = [...parsed.warnings, ...(coverage.missing.length ? [`Still no percentages for: ${coverage.missing.join(', ')}. Their games cannot be simulated until they are entered.`] : [])];
+  return c.json({ imported: parsed.entries.length, coverage, warnings }, 201);
+});
+
+/** Freeze the current values now (used by Simulate Week so every game in the batch shares one snapshot). */
+adminRoutes.post('/percentages/snapshot', async (c) => {
+  const b = await body(c, z.object({ seasonId: z.string() }));
+  return c.json({ snapshot: await snapshotCurrent(c.env.DB, b.seasonId, c.get('admin')) }, 201);
 });
 
 // ---------------------------------------------------------------------------------- simulation
@@ -398,12 +441,12 @@ async function prepare(c: C, gameId: string, opts: { needPct: boolean; snapshotI
   let snapshot: Snapshot | null = null;
   let entries = new Map<string, { activity: number; upset: number; star: number }>();
   if (opts.needPct) {
-    snapshot = await resolveSnapshot(c.env, db, season.id, await teamsForSeason(db, season.id), c.get('admin'), opts.snapshotId);
+    snapshot = await resolveSnapshot(db, season.id, c.get('admin'), opts.snapshotId);
     entries = await snapshotEntries(db, snapshot.id);
   }
   const mk = async (id: string) => {
     const t = await teamInput(db, season.id, id, entries.get(id) ?? null, rec.get(id));
-    if (opts.needPct && !entries.has(id)) throw new HttpError(422, `${t.name} has no percentages in the selected snapshot (taken ${new Date(snapshot!.fetched_at).toISOString()}). Import current percentages for this team; they are never estimated.`, { code: 'MISSING_PERCENTAGES', teamId: id });
+    if (opts.needPct && !entries.has(id)) throw new HttpError(422, `${t.name} has no stored percentages${opts.snapshotId ? ` in the selected snapshot (taken ${new Date(snapshot!.fetched_at).toISOString()})` : ''}. Enter its Activity, Upset and Star values in Team Percentages; they are never estimated.`, { code: 'MISSING_PERCENTAGES', teamId: id });
     return t;
   };
   const teams: [TeamInput, TeamInput] = [await mk(game.away_team_id), await mk(game.home_team_id)];
@@ -667,7 +710,7 @@ adminRoutes.get('/summary', async (c) => {
   if (!seasons.length) return c.json({ admin, season: null, counts: null });
   const season = await getSeason(db, c.req.query('season'));
   const one = async (sql: string, ...p: unknown[]) => (await first<{ n: number }>(db, sql, ...p))?.n ?? 0;
-  const latest = await first<Snapshot>(db, 'SELECT * FROM percentage_snapshots WHERE season_id = ?1 ORDER BY fetched_at DESC LIMIT 1', season.id);
+  const coverage = await pctCoverage(db, season.id);
   return c.json({
     admin, season,
     counts: {
@@ -679,7 +722,7 @@ adminRoutes.get('/summary', async (c) => {
       awaitingReview: await one("SELECT COUNT(*) AS n FROM simulation_runs r JOIN games g ON g.id = r.game_id WHERE g.season_id = ?1 AND r.status = 'candidate'", season.id),
       awaitingPublish: await one("SELECT COUNT(*) AS n FROM simulation_runs r JOIN games g ON g.id = r.game_id WHERE g.season_id = ?1 AND r.status = 'approved'", season.id),
     },
-    snapshot: latest, aiConfigured: !!c.env.ANTHROPIC_API_KEY, serverTime: now(),
+    percentages: coverage, aiConfigured: !!c.env.ANTHROPIC_API_KEY, serverTime: now(),
   });
 });
 void toRosterPlayers;

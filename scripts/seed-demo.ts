@@ -52,7 +52,7 @@ async function main() {
     const csv = ['name,jersey,position,secondary,depth,rating', ...SLOTS.map(([pos, depth, sec], k) => `${gamertag()},${k + 1},${pos},${sec},${depth},${Math.round(base + 8 - depth * 5 + rng.int(-4, 6))}`)].join('\n');
     await post('/admin/roster/import', { seasonId: season, teamId: id, csv });
   }
-  await post('/admin/percentages/import', { seasonId: season, format: 'csv', sourceDetail: 'DEMO values — not from the MCAA percentage system', content: ['team,activity,upset,star', ...TEAMS.map((t) => `${t[2]},${rng.int(40, 95)},${rng.int(15, 70)},${rng.int(20, 80)}`)].join('\n') });
+  await post('/admin/percentages/import', { seasonId: season, format: 'csv', content: ['team,activity,upset,star', ...TEAMS.map((t) => `${t[2]},${rng.int(40, 95)},${rng.int(15, 70)},${rng.int(20, 80)}`)].join('\n') });
   // Round-robin schedule (circle method), 7 weeks.
   const n = ids.length;
   const kick = (week: number, slot: number) => Date.UTC(2026, 8, 5 + (week - 1) * 7, 16 + slot * 3, slot % 2 ? 30 : 0);

@@ -68,42 +68,82 @@ describe('league data, percentages and scheduling', () => {
     expect(teams).toHaveLength(4);
     expect((await pub.get('/meta')).json.season.year).toBe(2026);
   });
-  it('validates percentage imports and never saves partial or invented data', async () => {
-    const before = (await admin.get(`/admin/percentages?season=${L.season}`)).json.snapshots.length;
+  const pctOf = async (abbr: string) => (await admin.get(`/admin/percentages?season=${L.season}`)).json.teams.find((t: any) => t.teamId === L.teams[abbr]);
+  it('stores team percentages in D1, validates imports and never saves partial or invented data', async () => {
+    const before = (await admin.get(`/admin/percentages?season=${L.season}`)).json.teams;
+    expect(before.every((t: any) => t.activity != null)).toBe(true);
     const bad = await admin.post('/admin/percentages/import', { seasonId: L.season, format: 'csv', content: 'team,activity,upset,star\nAAA,120,30,40\nBBB,50,,40\nZZZ,50,50,50\nAAA,1,2,3' });
     expect(bad.status).toBe(422);
     expect(bad.json.details.join(' ')).toMatch(/outside 0-100/);
     expect(bad.json.details.join(' ')).toMatch(/missing or not a number/);
     expect(bad.json.details.join(' ')).toMatch(/does not match any MCAA team/);
-    expect((await admin.get(`/admin/percentages?season=${L.season}`)).json.snapshots.length).toBe(before);
+    expect((await admin.get(`/admin/percentages?season=${L.season}`)).json.teams).toEqual(before); // nothing partial was written
+    // An import updates the listed teams and leaves the others alone.
     const json = await admin.post('/admin/percentages/import', { seasonId: L.season, format: 'json', content: JSON.stringify([{ team: 'AAA', activity: '85%', upset: 35, star: 70, morale: 55 }, { team: 'BBB', activity: 45, upset: 65, star: 20 }]) });
     expect(json.status).toBe(201);
-    expect(json.json.warnings.join(' ')).toMatch(/No percentages supplied for/);
-    const view = (await admin.get(`/admin/percentages?season=${L.season}&snapshot=${json.json.snapshot.id}`)).json;
-    const a = view.entries.find((e: any) => e.teamId === L.teams.AAA);
-    expect(a).toMatchObject({ activity: 85, upset: 35, star: 70, extra: { morale: 55 } });
-    // Snapshots are immutable at the database level.
+    expect(json.json).toMatchObject({ imported: 2, coverage: { total: 4, set: 4, missing: [] } });
+    expect(await pctOf('AAA')).toMatchObject({ activity: 85, upset: 35, star: 70, extra: { morale: 55 }, updatedBy: 'Admin 1' });
+    expect(await pctOf('CCC')).toMatchObject({ activity: before.find((t: any) => t.teamId === L.teams.CCC).activity });
+    // Direct edits from the admin dashboard.
+    expect((await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.CCC, activity: 50, upset: 40, star: 30 }] })).status).toBe(200);
+    expect(await pctOf('CCC')).toMatchObject({ activity: 50, upset: 40, star: 30 });
+    expect(await pctOf('AAA')).toMatchObject({ extra: { morale: 55 } }); // untouched teams keep extra categories
+    const audit = (await admin.get('/admin/audit')).json.entries.find((e: any) => e.action === 'percentages_updated');
+    expect(audit.new_value[L.teams.CCC]).toEqual({ activity: 50, upset: 40, star: 30 });
+    expect(audit.previous_value[L.teams.CCC]).not.toBeNull();
+    // Invalid edits are refused.
+    expect((await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.CCC, activity: 101, upset: 40, star: 30 }] })).status).toBe(400);
+    expect((await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: 'not-a-team', activity: 1, upset: 2, star: 3 }] })).status).toBe(422);
+    expect((await pub.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.CCC, activity: 1, upset: 1, star: 1 }] })).status).toBe(401);
+    await expect(env.DB.prepare('INSERT INTO team_percentages (season_id, team_id, activity, upset, star, updated_at) VALUES (?1, ?2, 150, 1, 1, 1) ON CONFLICT DO UPDATE SET activity = 150').bind(L.season, L.teams.CCC).run()).rejects.toThrow(/CHECK/);
+    // Snapshots taken for simulations stay immutable.
     await expect(env.DB.prepare('UPDATE percentage_snapshot_entries SET activity = 1').run()).rejects.toThrow(/immutable/);
   });
-  it('refuses to simulate a team that has no percentages in the chosen snapshot', async () => {
+  it('refuses to simulate a team that has no stored percentages', async () => {
     const g = await addGame(admin, L.season, 4, L.teams.CCC, L.teams.DDD);
-    const latest = (await admin.get(`/admin/percentages?season=${L.season}`)).json.snapshots[0].id; // AAA and BBB only
-    const r = await admin.post(`/admin/games/${g}/simulate`, { snapshotId: latest });
+    const kept = await pctOf('DDD');
+    expect((await admin.put('/admin/percentages', { seasonId: L.season, clear: [L.teams.DDD] })).json.coverage.missing).toEqual(['DDD Testers']);
+    const r = await admin.post(`/admin/games/${g}/simulate`, {});
     expect(r.status).toBe(422);
     expect(r.json.code).toBe('MISSING_PERCENTAGES');
+    expect(r.json.error).toMatch(/Team Percentages/);
+    await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.DDD, activity: kept.activity, upset: kept.upset, star: kept.star }] });
     await admin.del(`/admin/games/${g}`);
   });
-  it('reports an unavailable external source instead of substituting values', async () => {
-    const flaky = new Client({ ...env, PERCENTAGE_API_URL: 'https://percentages.invalid/api' } as Env);
-    flaky.cookie = admin.cookie;
+  it('simulates from the current D1 values, freezing them in a snapshot each run keeps', async () => {
     const g = await addGame(admin, L.season, 4, L.teams.CCC, L.teams.DDD);
-    const r = await flaky.post(`/admin/games/${g}/simulate`, {});
-    expect(r.status).toBe(502);
-    expect(r.json.code).toBe('SOURCE_UNAVAILABLE');
-    // An administrator may explicitly choose a previously verified snapshot.
-    const ok = await flaky.post(`/admin/games/${g}/simulate`, { snapshotId: L.snapshotId, seed: 'fallback' });
-    expect(ok.status).toBe(201);
-    await admin.post(`/admin/runs/${ok.json.runId}/reject`, { note: 'test' });
+    const run = async (body: Record<string, unknown>) => {
+      const r = await admin.post(`/admin/games/${g}/simulate`, { regenerate: true, ...body });
+      expect(r.status).toBe(201);
+      return { r, detail: (await admin.get(`/admin/runs/${r.json.runId}`)).json };
+    };
+    const first = await run({ seed: 'db-1' });
+    expect(first.detail.snapshot).toMatchObject({ source: 'database', away: { activity: 50, upset: 40, star: 30 } });
+    expect(first.detail.result.percentageChecks.filter((c: any) => c.side === 0).map((c: any) => c.percentage)).toEqual(expect.arrayContaining([50, 40, 30]));
+    // Unchanged values reuse the same snapshot instead of piling up copies.
+    const again = await run({ seed: 'db-2' });
+    expect(again.detail.snapshot.id).toBe(first.detail.snapshot.id);
+    // An edit is picked up by the next simulation; the earlier result keeps the values it was simulated with.
+    await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.DDD, activity: 11, upset: 22, star: 33 }] });
+    const edited = await run({ seed: 'db-3' });
+    expect(edited.detail.snapshot.id).not.toBe(first.detail.snapshot.id);
+    expect(edited.detail.snapshot.home).toMatchObject({ activity: 11, upset: 22, star: 33 });
+    expect(edited.detail.result.percentageChecks.filter((c: any) => c.side === 1 && c.category === 'star').every((c: any) => c.percentage === 33)).toBe(true);
+    expect((await admin.get(`/admin/runs/${first.r.json.runId}`)).json.snapshot.home.star).not.toBe(33);
+    // Same seed + same snapshot reproduces the game exactly.
+    const repro = await run({ seed: 'db-3', snapshotId: edited.detail.snapshot.id });
+    expect(repro.r.json.final).toEqual(edited.r.json.final);
+    // An administrator may deliberately reuse an earlier snapshot.
+    const old = await run({ seed: 'db-4', snapshotId: L.snapshotId });
+    expect(old.detail.snapshot.id).toBe(L.snapshotId);
+    await admin.post(`/admin/runs/${old.r.json.runId}/reject`, { note: 'test' });
+  });
+  it('needs no percentage API in the deployment configuration', async () => {
+    const { readFileSync } = await import('node:fs');
+    for (const f of ['wrangler.jsonc', '.dev.vars.example']) expect(readFileSync(f, 'utf8')).not.toMatch(/PERCENTAGE_API/);
+    expect(Object.keys(env)).not.toContain('PERCENTAGE_API_URL');
+    const routes = await Promise.all(['/admin/percentages/fetch', '/admin/percentages/source'].map((p) => admin.post(p, { seasonId: L.season })));
+    expect(routes.map((r) => r.status)).toEqual([404, 404]);
   });
   it('prevents duplicate games unless explicitly allowed', async () => {
     const g = await addGame(admin, L.season, 1, L.teams.AAA, L.teams.BBB);

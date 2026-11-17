@@ -11,7 +11,7 @@ import { PublishingCenter, ResultsReview, RunDetail, SimulationCenter } from './
 
 const SECTIONS: [string, string, typeof Gauge][] = [
   ['simulation', 'Simulation Center', Gauge], ['primetime', 'Primetime Import', Tv], ['schedule', 'Schedule Manager', CalendarDays], ['teams', 'Team Manager', Shield], ['roster', 'Roster Manager', UsersRound],
-  ['percentages', 'Percentage Integration', Percent], ['rankings', 'Rankings Manager', ListOrdered], ['review', 'Results Review', ClipboardCheck], ['publishing', 'Publishing Center', Send], ['settings', 'Simulation Settings', SettingsIcon], ['audit', 'Audit History', History],
+  ['percentages', 'Team Percentages', Percent], ['rankings', 'Rankings Manager', ListOrdered], ['review', 'Results Review', ClipboardCheck], ['publishing', 'Publishing Center', Send], ['settings', 'Simulation Settings', SettingsIcon], ['audit', 'Audit History', History],
 ];
 
 function Frame({ children, title }: { children: ReactNode; title: string }) {
@@ -126,7 +126,7 @@ function Overview() {
       </div>
       <Card title="Readiness">
         <ul className="space-y-2 text-sm">
-          <li>{q.data.snapshot ? <><Badge tone="green">OK</Badge> Latest percentage snapshot: {q.data.snapshot.team_count} teams, taken {fmtAgo(q.data.snapshot.fetched_at, q.data.serverTime)} ({q.data.snapshot.source}).</> : <><Badge tone="red">Missing</Badge> No team percentages imported. Simulations cannot run until they are. <Link className="underline" to="/admin/percentages">Percentage Integration</Link></>}</li>
+          <li>{q.data.percentages.total && !q.data.percentages.missing.length ? <><Badge tone="green">OK</Badge> Team percentages are set for all {q.data.percentages.total} teams.</> : <><Badge tone="red">Missing</Badge> {q.data.percentages.total ? `Team percentages are missing for ${q.data.percentages.missing.length} of ${q.data.percentages.total} teams (${q.data.percentages.missing.slice(0, 6).join(', ')}${q.data.percentages.missing.length > 6 ? '…' : ''}). Their games cannot be simulated until they are entered.` : 'No teams are entered in this season yet.'} <Link className="underline" to="/admin/percentages">Team Percentages</Link></>}</li>
           <li>{q.data.aiConfigured ? <><Badge tone="green">On</Badge> AI recaps and screenshot reading are available.</> : <><Badge>Off</Badge> AI recaps and screenshot reading are off (no <code>ANTHROPIC_API_KEY</code> secret). Standard recaps and manual entry are used.</>}</li>
         </ul>
       </Card>

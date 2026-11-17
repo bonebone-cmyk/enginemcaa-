@@ -106,6 +106,18 @@ export const MIGRATIONS: string[][] = [
     // Guard table: inserting NULL aborts the surrounding transaction. Used to make multi-statement publishes conditional.
     `CREATE TABLE _assert (ok INTEGER NOT NULL CHECK (ok = 1))`,
   ],
+  // 2: team percentages live in D1 and are edited by administrators; there is no external percentage API.
+  [
+    `CREATE TABLE team_percentages (season_id TEXT NOT NULL REFERENCES seasons(id), team_id TEXT NOT NULL REFERENCES teams(id),
+       activity REAL NOT NULL CHECK (activity BETWEEN 0 AND 100), upset REAL NOT NULL CHECK (upset BETWEEN 0 AND 100), star REAL NOT NULL CHECK (star BETWEEN 0 AND 100),
+       extra TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL, updated_by TEXT, updated_by_name TEXT, PRIMARY KEY (season_id, team_id))`,
+    // Carry over the most recent snapshot of each season so existing leagues keep their values.
+    `INSERT INTO team_percentages (season_id, team_id, activity, upset, star, extra, updated_at, updated_by, updated_by_name)
+       SELECT s.season_id, e.team_id, e.activity, e.upset, e.star, e.extra, s.fetched_at, s.created_by, 'imported snapshot'
+       FROM percentage_snapshots s JOIN percentage_snapshot_entries e ON e.snapshot_id = s.id
+       WHERE s.id = (SELECT s2.id FROM percentage_snapshots s2 WHERE s2.season_id = s.season_id ORDER BY s2.fetched_at DESC, s2.id LIMIT 1)`,
+    `DELETE FROM settings WHERE key = 'percentage_api_url'`,
+  ],
 ];
 
 let ready: Promise<void> | null = null;

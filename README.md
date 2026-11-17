@@ -21,7 +21,7 @@ It runs entirely on Cloudflare: one **Worker** (the API), one **D1** database, a
    characters. This is the only credential that can create administrator accounts.
 4. Visit `https://<your-worker>/setup`, enter the token and create the four administrators.
 5. Sign in at `/admin`. Start in **Team Manager** (season → conferences → teams), then **Roster Manager**,
-   **Schedule Manager** and **Percentage Integration**.
+   **Schedule Manager** and **Team Percentages** (enter Activity / Upset / Star for every team).
 
 The Worker creates and migrates its own tables on the first request. There is no SQL to run by hand.
 
@@ -40,8 +40,6 @@ npx wrangler secret put SETUP_TOKEN
 | --- | --- | --- |
 | `SETUP_TOKEN` | secret, required once | Allows creating/removing the four administrator accounts at `/setup`. |
 | `ANTHROPIC_API_KEY` | secret, optional | Turns on AI-written recaps and reading CFB 27 screenshots. Without it, recaps are written by the engine and values are typed in. |
-| `PERCENTAGE_API_URL` | variable, optional | HTTPS endpoint of the MCAA percentage system (can also be set in the admin UI). |
-| `PERCENTAGE_API_TOKEN` | secret, optional | Bearer token sent to that endpoint. |
 
 Plan note: the app is built to fit the Workers Free plan. A full simulation costs about 3 ms of CPU, and the heavier
 job — reconstructing a CFB 27 game around many locked statistics — is solved in the administrator's browser and then
@@ -70,7 +68,7 @@ SETUP_TOKEN=<same value as .dev.vars> npm run seed:demo -- http://127.0.0.1:8787
 | Folder | Responsibility |
 | --- | --- |
 | `engine/` | Pure TypeScript, no I/O. Play-by-play simulation (`sim.ts`), independent percentage checks (`percentages.ts`), roster eligibility (`roster.ts`), statistics derived from the play ledger (`stats.ts`), validation (`validate.ts`), highlights, recap, and the score-constrained CFB 27 reconstruction (`primetime.ts`). |
-| `worker/` | Hono API on Cloudflare Workers: `auth.ts` (sessions, four-admin rule), `db.ts` (schema + self-migration), `league.ts` (team records), `percent.ts` (snapshots/imports), `publish.ts` (transactional publishing), `ai.ts` (Claude recaps and screenshot reading), `public.ts`, `admin.ts`. |
+| `worker/` | Hono API on Cloudflare Workers: `auth.ts` (sessions, four-admin rule), `db.ts` (schema + self-migration), `league.ts` (team records), `percent.ts` (team percentages stored in D1, imports, snapshots), `publish.ts` (transactional publishing), `ai.ts` (Claude recaps and screenshot reading), `public.ts`, `admin.ts`. |
 | `src/` | React + TypeScript + Tailwind site: public pages and the eleven-section admin dashboard. Charts use Recharts. |
 | `tests/` | Vitest suites. API tests run against a real local D1 database. |
 | `docs/` | [`PERCENTAGES.md`](docs/PERCENTAGES.md) (exact meaning of Activity / Upset / Star), [`CALIBRATION.md`](docs/CALIBRATION.md) (measured output vs. college football ranges), [`DATA_MODEL.md`](docs/DATA_MODEL.md). |
@@ -90,7 +88,8 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 4. **Statistical consistency** — box scores are computed from the play ledger, never typed or generated separately.
    Twelve validation checks (fifteen for CFB 27 imports) — score = scoring plays, passing = receiving, takeaways =
    giveaways, legal downs and more — must pass before a result can be approved.
-5. **No invented source data** — a team without percentages cannot be simulated; an unreachable source is an error.
+5. **No invented source data** — percentages are entered by administrators and stored in D1; a team without them
+   cannot be simulated, and nothing is defaulted.
 6. **Realistic football** — see the calibration report.
 7. **Secure administration** — no registration endpoint; four-account cap enforced by a database trigger as well as code;
    all `/api/admin` routes require a server-side session; state-changing requests require same-origin + a custom header.
@@ -106,7 +105,7 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 - Public site: home/scoreboard/featured game/league digest, schedule with filters, game page (summary, box score, team
   stats, play-by-play, highlights, scoring, score chart), team pages, player pages, rankings, sortable leaderboards with minimum-attempt rules, multi-season switching.
 - Admin: Simulation Center (single game, Regenerate, Simulate Week with per-game isolation), Primetime Import Center,
-  Schedule/Team/Roster managers (CSV roster import, logos), Percentage Integration (CSV/JSON import, snapshots),
+  Schedule/Team/Roster managers (CSV roster import, logos), Team Percentages (edit in a table or import CSV/JSON; stored in D1),
   Rankings Manager (manual + computed suggestion), Results Review, Publishing Center (instant or replay presentation,
   corrections, withdrawals, version history), Simulation Settings, Audit History.
 - Engine: full play-by-play game with clock, downs, penalties, timeouts, fourth-down decisions, kicking game, overtime
@@ -120,10 +119,6 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 
 **Blocked on information only the league has**
 
-- *Direct connection to the external MCAA percentage system.* No documentation, URL or credentials for that system were
-  available, so nothing about its API is assumed. Two paths are ready: (1) CSV/JSON import, fully working; (2) a generic
-  HTTPS fetch that accepts JSON or CSV containing `team, activity, upset, star`. If the real system's format differs,
-  the only code to adapt is `parsePercentages` in `worker/percent.ts`.
 - *Reference images.* None were attached to the request, so the visual design is original (dark broadcast-style theme).
   Send them and the styling can be matched.
 
