@@ -30,23 +30,42 @@ function Frame({ children, title }: { children: ReactNode; title: string }) {
 }
 
 function Login({ onDone }: { onDone: () => void }) {
+  const [mode, setMode] = useState<'code' | 'account'>('code');
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const act = useAction();
   const status = useApi<{ adminCount: number; maxAdmins: number; setupEnabled: boolean }>('/setup/status');
-  const submit = (e: FormEvent) => { e.preventDefault(); act.run(async () => { await api.post('/auth/login', { email, password }); onDone(); }); };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    act.run(async () => {
+      if (mode === 'code') await api.post('/auth/code', { code, name: name.trim() || undefined });
+      else await api.post('/auth/login', { email, password });
+      onDone();
+    });
+  };
+  const tab = (m: typeof mode, label: string) => (
+    <button type="button" onClick={() => { setMode(m); act.clear(); }} className={cx('flex-1 rounded-md px-3 py-1.5 text-sm font-semibold', mode === m ? 'bg-gold text-ink-950' : 'text-ink-200 hover:bg-ink-800')}>{label}</button>
+  );
   return (
     <Frame title="Administrator sign-in">
+      <div className="mb-4 flex gap-1 rounded-lg border border-ink-700 bg-ink-900 p-1">{tab('code', 'Access code')}{tab('account', 'Admin account')}</div>
       <form onSubmit={submit} className="space-y-3">
-        <Field label="Email"><Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
-        <Field label="Password"><Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+        {mode === 'code' ? <>
+          <Field label="Code"><Input type="password" autoComplete="off" autoFocus required value={code} onChange={(e) => setCode(e.target.value)} /></Field>
+          <Field label="Your name (optional)" hint="Shown in the audit log next to the changes you make."><Input autoComplete="nickname" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        </> : <>
+          <Field label="Email"><Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
+          <Field label="Password"><Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+        </>}
         <ErrorBox error={act.error} />
         <Button variant="primary" className="w-full" busy={act.busy}>Sign in</Button>
       </form>
-      {status.data && status.data.adminCount < status.data.maxAdmins && (
+      {mode === 'account' && status.data && status.data.adminCount < status.data.maxAdmins && (
         <Notice className="mt-4">{status.data.adminCount === 0 ? 'No administrator accounts exist yet.' : `${status.data.adminCount} of ${status.data.maxAdmins} administrator accounts have been created.`} <Link to="/setup" className="font-semibold underline">Open administrator setup</Link></Notice>
       )}
-      <p className="mt-3 text-xs text-ink-400">Only the four designated MCAA administrators can sign in. There is no public registration.</p>
+      <p className="mt-3 text-xs text-ink-400">League administrators only. Enter the access code, or sign in with your own administrator account.</p>
     </Frame>
   );
 }

@@ -61,6 +61,40 @@ describe('authentication and the four-administrator rule', () => {
   });
 });
 
+describe('access-code login', () => {
+  it('signs in as an administrator with the code DIDYDOLLAR and rejects anything else', async () => {
+    const c = new Client(env);
+    expect((await c.post('/auth/code', { code: 'didydollar' })).status).toBe(401); // case-sensitive
+    expect((await c.post('/auth/code', { code: 'wrong' })).status).toBe(401);
+    expect((await c.get('/admin/summary')).status).toBe(401);
+    const ok = await c.post('/auth/code', { code: 'DIDYDOLLAR', name: 'Sam' });
+    expect(ok.status).toBe(200);
+    expect(ok.json.admin.name).toBe('Sam (code)');
+    expect((await c.get('/admin/summary')).status).toBe(200);
+    expect((await c.post('/admin/conferences', { name: 'Code Conf', abbr: 'CC' })).status).toBe(201);
+    const audit = (await c.get('/admin/audit')).json.entries.find((e: any) => e.action === 'conference_created');
+    expect(audit.admin_name).toBe('Sam (code)');
+    expect((await c.post('/auth/password', { current: 'x', next: 'something-long-enough' })).status).toBe(403);
+    await c.post('/auth/logout');
+    expect((await c.get('/admin/summary')).status).toBe(401);
+  });
+  it('does not use one of the four administrator slots and cannot be reached by email', async () => {
+    expect((await pub.get('/setup/status')).json.adminCount).toBe(4);
+    expect((await pub.post('/auth/login', { email: 'code-access@mcaa.invalid', password: '!' })).status).toBe(401);
+  });
+  it('locks out an address after repeated wrong codes, without affecting other addresses', async () => {
+    const bad = new Client(env);
+    for (let i = 0; i < 8; i++) await bad.req('POST', '/auth/code', { code: `guess${i}` }, { 'CF-Connecting-IP': '203.0.113.9' });
+    expect((await bad.req('POST', '/auth/code', { code: 'DIDYDOLLAR' }, { 'CF-Connecting-IP': '203.0.113.9' })).status).toBe(429);
+    expect((await new Client(env).req('POST', '/auth/code', { code: 'DIDYDOLLAR' }, { 'CF-Connecting-IP': '198.51.100.7' })).status).toBe(200);
+  });
+  it('accepts a replacement code from the ADMIN_CODE secret', async () => {
+    const custom = new Client({ ...env, ADMIN_CODE: 'NEW-CODE-123' } as Env);
+    expect((await custom.post('/auth/code', { code: 'DIDYDOLLAR' })).status).toBe(401);
+    expect((await custom.post('/auth/code', { code: 'NEW-CODE-123' })).status).toBe(200);
+  });
+});
+
 describe('league data, percentages and scheduling', () => {
   it('builds a league through the admin API', async () => {
     L = await seedLeague(admin);

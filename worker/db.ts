@@ -118,6 +118,14 @@ export const MIGRATIONS: string[][] = [
        WHERE s.id = (SELECT s2.id FROM percentage_snapshots s2 WHERE s2.season_id = s.season_id ORDER BY s2.fetched_at DESC, s2.id LIMIT 1)`,
     `DELETE FROM settings WHERE key = 'percentage_api_url'`,
   ],
+  // 3: shared "Code" login. It signs in to one built-in account with its own role, so it does not take one of the
+  // four named administrator slots. The account has no usable password; it can only be reached through /auth/code.
+  [
+    `INSERT INTO roles (id, name) VALUES ('code_admin', 'Administrator (access code)')`,
+    `INSERT INTO users (id, email, name, role_id, password_hash, password_salt, password_iter, created_at)
+       VALUES ('code-admin', 'code-access@mcaa.invalid', 'Code login', 'code_admin', '!', '!', 1, ${Date.UTC(2026, 10, 18)})`,
+    `ALTER TABLE sessions ADD COLUMN display_name TEXT`,
+  ],
 ];
 
 let ready: Promise<void> | null = null;

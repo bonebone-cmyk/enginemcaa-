@@ -17,10 +17,10 @@ It runs entirely on Cloudflare: one **Worker** (the API), one **D1** database, a
 1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Import a repository** → pick this repo.
 2. Leave **Build command** empty and keep **Deploy command** as `npx wrangler deploy`. Deploy.
    Wrangler builds the site and creates the D1 database (`mcaa-football-db`) automatically; there is no ID to paste.
-3. Open the Worker → **Settings → Variables and Secrets** → add a **secret** named `SETUP_TOKEN` with 16 or more random
-   characters. This is the only credential that can create administrator accounts.
-4. Visit `https://<your-worker>/setup`, enter the token and create the four administrators.
-5. Sign in at `/admin`. Start in **Team Manager** (season → conferences → teams), then **Roster Manager**,
+3. Go to `https://<your-worker>/admin` and sign in on the **Access code** tab with the code. That is all you need to
+   start running the league.
+4. Optional: to give each administrator their own email/password account, add a **secret** named `SETUP_TOKEN`
+   (16+ random characters) under the Worker's **Settings → Variables and Secrets**, then visit `/setup`. Start in **Team Manager** (season → conferences → teams), then **Roster Manager**,
    **Schedule Manager** and **Team Percentages** (enter Activity / Upset / Star for every team).
 
 The Worker creates and migrates its own tables on the first request. There is no SQL to run by hand.
@@ -38,7 +38,8 @@ npx wrangler secret put SETUP_TOKEN
 
 | Name | Kind | What it does |
 | --- | --- | --- |
-| `SETUP_TOKEN` | secret, required once | Allows creating/removing the four administrator accounts at `/setup`. |
+| `ADMIN_CODE` | secret, optional | Replaces the built-in access code for the "Access code" sign-in. |
+| `SETUP_TOKEN` | secret, optional | Allows creating/removing the four named administrator accounts at `/setup`. |
 | `ANTHROPIC_API_KEY` | secret, optional | Turns on AI-written recaps and reading CFB 27 screenshots. Without it, recaps are written by the engine and values are typed in. |
 
 Plan note: the app is built to fit the Workers Free plan. A full simulation costs about 3 ms of CPU, and the heavier

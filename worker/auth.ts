@@ -12,6 +12,8 @@ export interface Env {
   ASSETS: Fetcher;
   SETUP_TOKEN?: string;
   ANTHROPIC_API_KEY?: string;
+  /** Optional: replaces the built-in access code for the "Code" login. */
+  ADMIN_CODE?: string;
 }
 export interface AdminUser {
   id: string;
@@ -82,7 +84,7 @@ function setCookie(c: Context, value: string, maxAgeSec: number) {
 export async function currentAdmin(c: Context<AppEnv>): Promise<AdminUser | null> {
   const token = cookieValue(c, COOKIE);
   if (!token) return null;
-  const row = await first<AdminUser>(c.env.DB, "SELECT u.id, u.email, u.name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.role_id = 'admin'", await sha256(token), now());
+  const row = await first<AdminUser>(c.env.DB, "SELECT u.id, u.email, COALESCE(s.display_name, u.name) AS name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.role_id IN ('admin', 'code_admin')", await sha256(token), now());
   return row ?? null;
 }
 
@@ -140,6 +142,41 @@ authRoutes.post('/auth/login', async (c) => {
   return c.json({ admin: { id: user!.id, email: user!.email, name: user!.name } });
 });
 
+// ---- Shared access-code login ("Code").
+// Only a PBKDF2 hash of the default code is in the source. Setting the optional ADMIN_CODE secret on the Worker
+// replaces the default code without a code change.
+const DEFAULT_CODE = { salt: 'r7UcW8WkdwDwSHYriJk+wA==', hash: 'eCuFhfeUsCcfCcoSSZIJH42u9NIjtXryr+Z3oX19NcE=', iterations: 100_000 };
+async function codeMatches(env: Env, given: string): Promise<boolean> {
+  const custom = env.ADMIN_CODE?.trim();
+  if (custom) return safeEqual(given, custom);
+  return safeEqual((await hashPassword(given, DEFAULT_CODE.salt, DEFAULT_CODE.iterations)).hash, DEFAULT_CODE.hash);
+}
+
+authRoutes.post('/auth/code', async (c) => {
+  checkCsrf(c);
+  const body = z.object({ code: z.string().trim().min(1, 'Enter the code.').max(200), name: z.string().trim().max(60).optional() }).parse(await c.req.json());
+  const db = c.env.DB;
+  // Failed attempts are limited per network address so one person guessing cannot lock everyone else out.
+  const key = `code:${c.req.header('CF-Connecting-IP') ?? 'local'}`;
+  const recent = (await first<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM login_attempts WHERE email = ?1 AND ok = 0 AND at > ?2', key, now() - 15 * 60_000))!.c;
+  if (recent >= 8) throw new HttpError(429, 'Too many incorrect codes. Try again in 15 minutes.');
+  const ok = await codeMatches(c.env, body.code);
+  await stmt(db, 'INSERT INTO login_attempts (email, at, ok) VALUES (?1, ?2, ?3)', key, now(), ok ? 1 : 0).run();
+  if (!ok) throw new HttpError(401, 'Incorrect code.');
+  const user = await first<{ id: string; email: string; name: string }>(db, "SELECT id, email, name FROM users WHERE id = 'code-admin' AND role_id = 'code_admin'");
+  if (!user) throw new HttpError(503, 'Code login is not available on this database.');
+  const name = body.name ? `${body.name} (code)` : user.name;
+  const token = hex(crypto.getRandomValues(new Uint8Array(32)).buffer as ArrayBuffer);
+  await db.batch([
+    stmt(db, 'DELETE FROM sessions WHERE expires_at < ?1', now()),
+    stmt(db, 'INSERT INTO sessions (token_hash, user_id, created_at, expires_at, display_name) VALUES (?1, ?2, ?3, ?4, ?5)', await sha256(token), user.id, now(), now() + SESSION_MS, name),
+    stmt(db, 'UPDATE users SET last_login_at = ?1 WHERE id = ?2', now(), user.id),
+    auditStmt(db, { id: user.id, name }, { action: 'login', entity: 'session', next: { method: 'code' } }),
+  ]);
+  setCookie(c, token, SESSION_MS / 1000);
+  return c.json({ admin: { id: user.id, email: user.email, name } });
+});
+
 authRoutes.post('/auth/logout', async (c) => {
   checkCsrf(c);
   const token = cookieValue(c, COOKIE);
@@ -153,6 +190,7 @@ authRoutes.get('/auth/me', async (c) => c.json({ admin: await currentAdmin(c) })
 authRoutes.post('/auth/password', requireAdmin, async (c) => {
   const body = z.object({ current: z.string(), next: passwordSchema }).parse(await c.req.json());
   const admin = c.get('admin');
+  if (admin.id === 'code-admin') throw new HttpError(403, 'You signed in with the access code, which has no password to change.');
   const user = (await first<{ password_hash: string; password_salt: string; password_iter: number }>(c.env.DB, 'SELECT * FROM users WHERE id = ?1', admin.id))!;
   const attempt = await hashPassword(body.current, user.password_salt, user.password_iter);
   if (!(await safeEqual(attempt.hash, user.password_hash))) throw new HttpError(401, 'Current password is incorrect.');
