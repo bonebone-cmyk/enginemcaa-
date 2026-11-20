@@ -20,7 +20,7 @@ export interface PctState {
 }
 
 export function overall(t: TeamInput): number {
-  return (t.offRating + t.defRating) / 2;
+  return t.upsetBasis ?? (t.offRating + t.defRating) / 2;
 }
 
 export function runPercentageChecks(seed: string, teams: [TeamInput, TeamInput], lineups: [Lineup, Lineup], cfg: SimConfig): { state: [PctState, PctState]; checks: PercentageCheck[] } {

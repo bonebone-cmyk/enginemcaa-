@@ -24,7 +24,9 @@ invents, defaults, averages or estimates a value.
 | Part of the game it touches | Execution quality, quarter by quarter | The matchup gap, half by half | Who makes the plays |
 
 The three effect sizes are settings (Simulation Settings): `activityEffect`, `upsetGapClosure`, `starBoost`.
-The "rating gap" is the difference in (offense + defense) / 2, including home-field advantage.
+The "rating gap" decides who is the underdog. There are no team overall ratings on the league site, so it is based on
+win-loss record going into the game (a 1.000 team is 10 points stronger than a .000 team) plus home-field advantage.
+In week 1, before anyone has a record, the away team is the underdog.
 
 ### Worked example
 

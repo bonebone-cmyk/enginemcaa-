@@ -41,28 +41,27 @@ async function main() {
   const status = await call('GET', '/setup/status');
   if (status.adminCount < 4) await call('POST', '/setup/admins', { email: EMAIL, name: 'Demo Admin', password: PASSWORD }, { Authorization: `Bearer ${TOKEN}` }).catch((e) => console.log('admin not created:', e.message));
   await post('/auth/login', { email: EMAIL, password: PASSWORD });
-  const season = (await post('/admin/seasons', { year: 2026, name: '2026 Demo Season', weeks: 7, isCurrent: true })).id;
+  const season = (await post('/admin/seasons', { year: 2026, name: '2026 Demo Season', weeks: 7, isCurrent: true, startDate: '2026-09-05', championshipWeek: 7 })).id;
   const confs = [(await post('/admin/conferences', { name: 'Overworld Conference', abbr: 'OWC' })).id, (await post('/admin/conferences', { name: 'Deepslate Conference', abbr: 'DSC' })).id];
   const ids: string[] = [];
   for (const [i, [name, shortName, abbr, primaryColor, secondaryColor, stadium]] of TEAMS.entries()) {
     const id = (await post('/admin/teams', { name, shortName, abbr, primaryColor, secondaryColor, stadium, mascot: name.split(' ').pop() })).id;
     ids.push(id);
-    const base = 66 + ((i * 7) % 16);
-    await call('PUT', `/admin/teams/${id}/season`, { seasonId: season, conferenceId: confs[i % 2], offRating: base + rng.int(-3, 5), defRating: base + rng.int(-4, 4), stRating: 65 + rng.int(0, 15), offScheme: OFF_SCHEMES[i % OFF_SCHEMES.length], defScheme: DEF_SCHEMES[(i * 2) % DEF_SCHEMES.length], runPct: i === 3 ? 65 : null, tempo: ['normal', 'fast', 'slow'][i % 3] });
-    const csv = ['name,jersey,position,secondary,depth,rating', ...SLOTS.map(([pos, depth, sec], k) => `${gamertag()},${k + 1},${pos},${sec},${depth},${Math.round(base + 8 - depth * 5 + rng.int(-4, 6))}`)].join('\n');
+    await call('PUT', `/admin/teams/${id}/season`, { seasonId: season, conferenceId: confs[i % 2], offScheme: OFF_SCHEMES[i % OFF_SCHEMES.length], defScheme: DEF_SCHEMES[(i * 2) % DEF_SCHEMES.length], runPct: i === 3 ? 65 : null, tempo: ['normal', 'fast', 'slow'][i % 3] });
+    const csv = SLOTS.map(([pos, , sec], k) => `${gamertag()},${[pos, sec].filter(Boolean).join('/')},${k + 1}`).join('\n');
     await post('/admin/roster/import', { seasonId: season, teamId: id, csv });
   }
   await post('/admin/percentages/import', { seasonId: season, format: 'csv', content: ['team,activity,upset,star', ...TEAMS.map((t) => `${t[2]},${rng.int(40, 95)},${rng.int(15, 70)},${rng.int(20, 80)}`)].join('\n') });
   // Round-robin schedule (circle method), 7 weeks.
   const n = ids.length;
-  const kick = (week: number, slot: number) => Date.UTC(2026, 8, 5 + (week - 1) * 7, 16 + slot * 3, slot % 2 ? 30 : 0);
+  const TIMES = ['noon', '3:30', '7:30', '10:30'];
   const games: { id: string; week: number }[] = [];
   const order = [...ids];
   for (let w = 1; w <= 7; w++) {
     for (let k = 0; k < n / 2; k++) {
       const [a, h] = w % 2 ? [order[k], order[n - 1 - k]] : [order[n - 1 - k], order[k]];
       const des = k === 0 ? ['gotw'] : k === 1 && w % 3 === 0 ? ['rivalry'] : [];
-      const g = await post('/admin/games', { seasonId: season, week: w, awayTeamId: a, homeTeamId: h, kickoffAt: kick(w, k), network: ['MCAA Network', 'BlockSports', 'MCAA+', 'The Overworld Channel'][k], designations: des, mode: w === 4 && k === 1 ? 'primetime' : 'sim' });
+      const g = await post('/admin/games', { seasonId: season, week: w, awayTeamId: a, homeTeamId: h, time: TIMES[k], network: ['MCAA Network', 'BlockSports', 'MCAA+', 'The Overworld Channel'][k], designations: des, mode: w === 4 && k === 1 ? 'primetime' : 'sim' });
       games.push({ id: g.id, week: w });
     }
     order.splice(1, 0, order.pop()!);

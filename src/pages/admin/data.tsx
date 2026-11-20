@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isSaturday, KICKOFF_SLOTS, SLOT_LABEL, weekDate } from '../../../engine/schedule';
 import { DEF_SCHEMES, OFF_SCHEMES, POSITIONS, TEMPOS } from '../../../engine/types';
 import { api, qs, useApi } from '../../api';
 import { DESIGNATION, TeamLogo, fmtKick, useSeason } from '../../shared';
@@ -6,7 +7,14 @@ import { Badge, Button, Card, Check, Empty, ErrorBox, Field, Input, Load, Modal,
 import { useTeams, weeksOf } from './sim';
 
 type Row = Record<string, any>;
-const toLocalInput = (ms: number | null) => { if (!ms) return ''; const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+const TIME_OPTIONS = [...KICKOFF_SLOTS, 'tbd'] as const;
+const satLabel = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+/** "Sat, Sep 5, 2026" for a week, or a hint when the season has no start date yet. */
+function useWeekDate() {
+  const { meta } = useSeason();
+  const s = meta?.season;
+  return (week: number) => (s?.startDate ? satLabel(weekDate(s.startDate, week, s.championshipWeek ?? s.weeks)) : null);
+}
 const numOr = (v: string, fallback: number | null) => (v === '' || Number.isNaN(Number(v)) ? fallback : Number(v));
 
 // ================================================================== SCHEDULE MANAGER
@@ -14,15 +22,16 @@ function GameForm({ game, onClose, onSaved }: { game: Row | null; onClose: () =>
   const { meta, seasonId } = useSeason();
   const published = game?.status === 'final';
   const [f, setF] = useState<Row>(() => game ? {
-    week: game.week, awayTeamId: game.away_team_id, homeTeamId: game.home_team_id, kickoffAt: toLocalInput(game.kickoff_at), network: game.network ?? '', stadium: game.stadium ?? '', neutralSite: !!game.neutral_site,
+    week: game.week, awayTeamId: game.away_team_id, homeTeamId: game.home_team_id, time: game.kickoff_slot ?? '', network: game.network ?? '', stadium: game.stadium ?? '', neutralSite: !!game.neutral_site,
     mode: game.mode, designations: game.designations as string[], status: game.status, liveAway: game.live_away ?? '', liveHome: game.live_home ?? '', livePeriod: game.live_period ?? '', liveClock: game.live_clock ?? '', allowDuplicate: false,
-  } : { week: meta?.currentWeek ?? 1, awayTeamId: '', homeTeamId: '', kickoffAt: '', network: '', stadium: '', neutralSite: false, mode: 'sim', designations: [], status: 'scheduled', allowDuplicate: false });
+  } : { week: meta?.currentWeek ?? 1, awayTeamId: '', homeTeamId: '', time: 'tbd', network: '', stadium: '', neutralSite: false, mode: 'sim', designations: [], status: 'scheduled', allowDuplicate: false });
   const act = useAction();
+  const dateOf = useWeekDate();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
   const save = () => act.run(async () => {
-    const base = { week: Number(f.week), awayTeamId: f.awayTeamId, homeTeamId: f.homeTeamId, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).getTime() : null, network: f.network || null, stadium: f.stadium || null, neutralSite: f.neutralSite, mode: f.mode, designations: f.designations, allowDuplicate: f.allowDuplicate };
+    const base = { week: Number(f.week), awayTeamId: f.awayTeamId, homeTeamId: f.homeTeamId, ...(f.time ? { time: f.time } : {}), network: f.network || null, stadium: f.stadium || null, neutralSite: f.neutralSite, mode: f.mode, designations: f.designations, allowDuplicate: f.allowDuplicate };
     if (!game) await api.post('/admin/games', { ...base, seasonId });
-    else if (published) await api.patch(`/admin/games/${game.id}`, { week: base.week, kickoffAt: base.kickoffAt, network: base.network, stadium: base.stadium, neutralSite: base.neutralSite, designations: base.designations, allowDuplicate: base.allowDuplicate });
+    else if (published) await api.patch(`/admin/games/${game.id}`, { week: base.week, ...(f.time ? { time: f.time } : {}), network: base.network, stadium: base.stadium, neutralSite: base.neutralSite, designations: base.designations, allowDuplicate: base.allowDuplicate });
     else await api.patch(`/admin/games/${game.id}`, { ...base, status: f.status, ...(f.status === 'in_progress' ? { liveAway: numOr(String(f.liveAway), null), liveHome: numOr(String(f.liveHome), null), livePeriod: f.livePeriod || null, liveClock: f.liveClock || null } : {}) });
     onSaved();
   });
@@ -34,7 +43,12 @@ function GameForm({ game, onClose, onSaved }: { game: Row | null; onClose: () =>
         <Field label="Away team"><Select disabled={published} value={f.awayTeamId} onChange={(e) => set('awayTeamId', e.target.value)}><option value="">Select…</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
         <Field label="Home team"><Select disabled={published} value={f.homeTeamId} onChange={(e) => set('homeTeamId', e.target.value)}><option value="">Select…</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
         <Field label="Week"><Input type="number" min={0} max={40} value={f.week} onChange={(e) => set('week', e.target.value)} /></Field>
-        <Field label="Kickoff (your local time)"><Input type="datetime-local" value={f.kickoffAt} onChange={(e) => set('kickoffAt', e.target.value)} /></Field>
+        <Field label="Kickoff time (Eastern)" hint={dateOf(Number(f.week)) ? `Plays ${dateOf(Number(f.week))}` : 'Set the season start date to fill in dates automatically.'}>
+          <Select value={f.time} onChange={(e) => set('time', e.target.value)}>
+            {game && !game.kickoff_slot && <option value="">Keep current time ({fmtKick(game.kickoff_at)})</option>}
+            {TIME_OPTIONS.map((t) => <option key={t} value={t}>{SLOT_LABEL[t]}</option>)}
+          </Select>
+        </Field>
         <Field label="Network"><Input value={f.network} onChange={(e) => set('network', e.target.value)} placeholder="e.g. MCAA Network" /></Field>
         <Field label="Stadium" hint="Defaults to the home team's stadium."><Input value={f.stadium} onChange={(e) => set('stadium', e.target.value)} /></Field>
         <Field label="Game mode"><Select disabled={published} value={f.mode} onChange={(e) => set('mode', e.target.value)}><option value="sim">Full simulation</option><option value="primetime">CFB 27 primetime (score imported)</option></Select></Field>
@@ -63,15 +77,18 @@ export function ScheduleManager() {
   const [week, setWeek] = useState<string>('all');
   const q = useApi<any>(`/admin/games${qs({ season: seasonId, week: week === 'all' ? null : week })}`);
   const [edit, setEdit] = useState<Row | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const act = useAction();
   const refresh = () => { q.reload(); reload(); };
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <h1 className="font-display text-3xl font-bold uppercase">Schedule Manager</h1>
-        <Field label="Week" className="ml-auto w-36"><Select value={week} onChange={(e) => setWeek(e.target.value)}><option value="all">All weeks</option>{weeksOf(meta).map((w) => <option key={w} value={w}>Week {w}</option>)}</Select></Field>
+        <Button className="ml-auto" onClick={() => setImporting(true)} disabled={(meta?.teams.length ?? 0) < 2}>Import games</Button>
+        <Field label="Week" className="w-36"><Select value={week} onChange={(e) => setWeek(e.target.value)}><option value="all">All weeks</option>{weeksOf(meta).map((w) => <option key={w} value={w}>Week {w}</option>)}</Select></Field>
         <Button variant="primary" onClick={() => setEdit('new')} disabled={(meta?.teams.length ?? 0) < 2}>Schedule a game</Button>
       </div>
+      <SeasonCalendar onSaved={refresh} />
       {(meta?.teams.length ?? 0) < 2 && <Notice>Add at least two teams to this season in Team Manager before scheduling games.</Notice>}
       <ErrorBox error={act.error} />
       <Load q={q}>{(d) => !d.games.length ? <Card><Empty>No games scheduled{week === 'all' ? ' this season' : ` in week ${week}`}.</Empty></Card> : (
@@ -81,7 +98,7 @@ export function ScheduleManager() {
             <tr key={g.id} className={cx('border-b border-ink-800 last:border-0', g.status === 'canceled' && 'opacity-50')}>
               <td className={cx(td, 'tnum')}>{g.week}</td>
               <td className={td}><span className="flex items-center gap-2"><TeamLogo team={team(g.away_team_id)} size={20} /><b>{team(g.away_team_id).short}</b><span className="text-ink-400">{g.neutral_site ? 'vs' : 'at'}</span><TeamLogo team={team(g.home_team_id)} size={20} /><b>{team(g.home_team_id).short}</b></span></td>
-              <td className={cx(td, 'text-ink-200')}>{fmtKick(g.kickoff_at)}</td><td className={td}>{g.network ?? '—'}</td>
+              <td className={cx(td, 'text-ink-200')}>{fmtKick(g.kickoff_at, g.kickoff_slot)}</td><td className={td}>{g.network ?? '—'}</td>
               <td className={td}><span className="flex flex-wrap gap-1">{g.designations.map((x: string) => DESIGNATION[x] && <Badge key={x} tone={DESIGNATION[x].tone}>{DESIGNATION[x].label}</Badge>)}</span></td>
               <td className={td}>{g.status === 'final' ? <Badge tone="green">Final {g.away_score}–{g.home_score}</Badge> : g.status === 'in_progress' ? <Badge tone="live">Live {g.live_away}–{g.live_home}</Badge> : <Badge tone={g.status === 'canceled' ? 'red' : g.status === 'postponed' ? 'gold' : 'neutral'}>{g.status}</Badge>}</td>
               <td className={cx(td, 'text-right')}><span className="inline-flex gap-1.5">
@@ -91,7 +108,82 @@ export function ScheduleManager() {
               </span></td>
             </tr>))}</tbody></table></div></Card>)}</Load>
       {edit && <GameForm game={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); refresh(); }} />}
+      {importing && <GameImport onClose={() => setImporting(false)} onDone={() => { setImporting(false); refresh(); }} />}
     </div>
+  );
+}
+
+/** Season start Saturday and championship week. Changing either re-dates every game that has a kickoff time. */
+function SeasonCalendar({ onSaved }: { onSaved: () => void }) {
+  const { meta, reload } = useSeason();
+  const s = meta?.season;
+  const [start, setStart] = useState(s?.startDate ?? '');
+  const [champ, setChamp] = useState<string>(String(s?.championshipWeek ?? s?.weeks ?? ''));
+  const [weeks, setWeeks] = useState(String(s?.weeks ?? 14));
+  const act = useAction();
+  useEffect(() => { setStart(s?.startDate ?? ''); setChamp(String(s?.championshipWeek ?? s?.weeks ?? '')); setWeeks(String(s?.weeks ?? 14)); }, [s?.id, s?.startDate, s?.championshipWeek, s?.weeks]);
+  if (!s) return null;
+  const nWeeks = Number(weeks) || s.weeks;
+  const champWeek = champ === 'none' ? null : Number(champ) || nWeeks;
+  const badStart = !!start && !isSaturday(start);
+  const dirty = start !== (s.startDate ?? '') || nWeeks !== s.weeks || champWeek !== (s.championshipWeek ?? s.weeks);
+  const preview = start && !badStart ? [1, 2, ...(champWeek && champWeek > 3 ? [champWeek - 1] : []), ...(champWeek ? [champWeek] : [nWeeks])].filter((w, i, a) => a.indexOf(w) === i && w <= nWeeks) : [];
+  return (
+    <Card title="Season calendar">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Week 1 Saturday" hint={badStart ? <span className="text-red-300">That date is not a Saturday.</span> : 'Each following week is the next Saturday.'}><Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={cx('!w-44', badStart && '!border-red-500')} /></Field>
+        <Field label="Weeks"><Input type="number" min={1} max={30} value={weeks} onChange={(e) => setWeeks(e.target.value)} className="!w-20" /></Field>
+        <Field label="Championship week" hint="Played two weeks after the week before it.">
+          <Select value={champWeek == null ? 'none' : String(champWeek)} onChange={(e) => setChamp(e.target.value)} className="!w-48">
+            {Array.from({ length: nWeeks - 1 }, (_, i) => i + 2).map((w) => <option key={w} value={w}>Week {w}</option>)}
+            <option value="none">No championship break</option>
+          </Select>
+        </Field>
+        <Button variant="primary" busy={act.busy} disabled={!dirty || badStart} onClick={() => act.run(async () => { await api.patch(`/admin/seasons/${s.id}`, { startDate: start || null, weeks: nWeeks, championshipWeek: champWeek }); reload(); onSaved(); })}>Save calendar</Button>
+      </div>
+      {preview.length > 0 && <p className="mt-2 text-xs text-ink-300">{preview.map((w) => `Week ${w}: ${satLabel(weekDate(start, w, champWeek))}`).join(' · ')}</p>}
+      {!s.startDate && <p className="mt-2 text-xs text-amber-200">No start date yet: games show their time but no date until you set one.</p>}
+      <ErrorBox className="mt-2" error={act.error} />
+    </Card>
+  );
+}
+
+function GameImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { seasonId, meta } = useSeason();
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState<Row[] | null>(null);
+  const act = useAction();
+  const dateOf = useWeekDate();
+  const example = (meta?.teams ?? []).slice(0, 4).map((t) => t.abbr);
+  const run = (dryRun: boolean) => act.run(async () => {
+    const r = await api.post('/admin/games/import', { seasonId, text, dryRun });
+    if (dryRun) setPreview(r.games); else onDone();
+  });
+  return (
+    <Modal wide title="Import games" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-ink-700 bg-ink-900 p-3 text-sm text-ink-200">
+          <p>One game per line: <code className="text-gold-soft">week,away,home,time</code></p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink-300">
+            <li>Teams: abbreviation, short name or full name.</li>
+            <li>Time (Eastern): <b>noon</b>, <b>3:30</b>, <b>6:30</b>, <b>7:30</b> or <b>10:30</b>. Leave it off for TBD.</li>
+            <li>Optional tags after the time: gotw, rivalry, primetime, championship, playoff, bowl, neutral.</li>
+            <li>The date comes from the week and the season calendar.</li>
+          </ul>
+          {example.length >= 4 && <pre className="mt-2 rounded bg-ink-950 p-2 text-xs text-ink-200">{`1,${example[0]},${example[1]},noon
+1,${example[2]},${example[3]},7:30,gotw
+2,${example[1]},${example[2]},3:30,rivalry`}</pre>}
+        </div>
+        <Textarea rows={10} value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} spellCheck={false} placeholder="1,TUL,FRS,3:30" />
+        <ErrorBox error={act.error} />
+        {preview && (
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-emerald-500/40">
+            <p className="sticky top-0 bg-emerald-950 px-3 py-1.5 text-sm text-emerald-100">{preview.length} game{preview.length === 1 ? '' : 's'} ready to import</p>
+            <table className="w-full"><tbody>{preview.map((g, i) => <tr key={i} className="border-t border-ink-800"><td className={cx(td, 'tnum')}>Wk {g.week}</td><td className={td}>{g.awayName} {g.neutral ? 'vs' : 'at'} {g.homeName}</td><td className={td}>{dateOf(g.week) ?? '—'}</td><td className={td}>{SLOT_LABEL[g.slot as keyof typeof SLOT_LABEL]}</td><td className={cx(td, 'text-xs text-ink-400')}>{g.designations.map((d: string) => DESIGNATION[d]?.label ?? d).join(', ')}</td></tr>)}</tbody></table>
+          </div>)}
+        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button busy={act.busy} disabled={!text.trim()} onClick={() => run(true)}>Check</Button><Button variant="primary" busy={act.busy} disabled={!preview?.length} onClick={() => run(false)}>Import {preview?.length ?? ''} games</Button></div>
+      </div>
+    </Modal>
   );
 }
 
@@ -111,7 +203,7 @@ function TeamForm({ team, onClose, onSaved }: { team: Row | null; onClose: () =>
   const confs = useApi<any>('/admin/conferences');
   const [f, setF] = useState<Row>(() => ({
     name: team?.name ?? '', shortName: team?.short_name ?? '', abbr: team?.abbr ?? '', mascot: team?.mascot ?? '', primaryColor: team?.primary_color ?? '#1e3a5f', secondaryColor: team?.secondary_color ?? '#ffffff', stadium: team?.stadium ?? '',
-    logo: null as string | null, removeLogo: false, inSeason: team ? !!team.in_season : true, conferenceId: team?.conference_id ?? '', offRating: team?.off_rating ?? 70, defRating: team?.def_rating ?? 70, stRating: team?.st_rating ?? 70,
+    logo: null as string | null, removeLogo: false, inSeason: team ? !!team.in_season : true, conferenceId: team?.conference_id ?? '',
     offScheme: team?.off_scheme ?? 'Balanced', defScheme: team?.def_scheme ?? '4-3', customRun: team?.run_pct != null, runPct: team?.run_pct ?? 50, tempo: team?.tempo ?? 'normal',
   }));
   const act = useAction();
@@ -120,7 +212,7 @@ function TeamForm({ team, onClose, onSaved }: { team: Row | null; onClose: () =>
     const base = { name: f.name, shortName: f.shortName || f.name, abbr: f.abbr, mascot: f.mascot || null, primaryColor: f.primaryColor, secondaryColor: f.secondaryColor, stadium: f.stadium || null, ...(f.logo ? { logo: f.logo } : {}) };
     const id = team ? team.id : (await api.post('/admin/teams', base)).id;
     if (team) await api.patch(`/admin/teams/${id}`, { ...base, removeLogo: f.removeLogo || undefined });
-    if (seasonId && f.inSeason) await api.put(`/admin/teams/${id}/season`, { seasonId, conferenceId: f.conferenceId || null, offRating: Number(f.offRating), defRating: Number(f.defRating), stRating: Number(f.stRating), offScheme: f.offScheme, defScheme: f.defScheme, runPct: f.customRun ? Number(f.runPct) : null, tempo: f.tempo });
+    if (seasonId && f.inSeason) await api.put(`/admin/teams/${id}/season`, { seasonId, conferenceId: f.conferenceId || null, offScheme: f.offScheme, defScheme: f.defScheme, runPct: f.customRun ? Number(f.runPct) : null, tempo: f.tempo });
     else if (seasonId && team?.in_season && !f.inSeason) await api.del(`/admin/teams/${id}/season?season=${seasonId}`);
     onSaved();
   });
@@ -147,9 +239,6 @@ function TeamForm({ team, onClose, onSaved }: { team: Row | null; onClose: () =>
             <Field label="Conference"><Select value={f.conferenceId} onChange={(e) => set('conferenceId', e.target.value)}><option value="">Independent</option>{confs.data?.conferences.map((c: Row) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
             <Field label="Offensive identity"><Select value={f.offScheme} onChange={(e) => set('offScheme', e.target.value)}>{OFF_SCHEMES.map((s) => <option key={s}>{s}</option>)}</Select></Field>
             <Field label="Defensive identity"><Select value={f.defScheme} onChange={(e) => set('defScheme', e.target.value)}>{DEF_SCHEMES.map((s) => <option key={s}>{s}</option>)}</Select></Field>
-            <Field label="Offense rating (40–99)"><Input type="number" min={40} max={99} value={f.offRating} onChange={(e) => set('offRating', e.target.value)} /></Field>
-            <Field label="Defense rating (40–99)"><Input type="number" min={40} max={99} value={f.defRating} onChange={(e) => set('defRating', e.target.value)} /></Field>
-            <Field label="Special teams rating (40–99)"><Input type="number" min={40} max={99} value={f.stRating} onChange={(e) => set('stRating', e.target.value)} /></Field>
             <Field label="Tempo"><Select value={f.tempo} onChange={(e) => set('tempo', e.target.value)}>{TEMPOS.map((s) => <option key={s}>{s}</option>)}</Select></Field>
             <div className="sm:col-span-2">
               <Check label="Custom run / pass ratio (overrides the scheme default)" checked={f.customRun} onChange={(v) => set('customRun', v)} />
@@ -170,7 +259,7 @@ export function TeamManager() {
   const seasons = useApi<any>('/admin/seasons');
   const confs = useApi<any>('/admin/conferences');
   const [edit, setEdit] = useState<Row | 'new' | null>(null);
-  const [ns, setNs] = useState({ year: String(new Date().getFullYear()), name: '', weeks: '14' });
+  const [ns, setNs] = useState({ year: String(new Date().getFullYear()), name: '', weeks: '14', startDate: '' });
   const [nc, setNc] = useState({ name: '', abbr: '' });
   const act = useAction();
   const refresh = () => { q.reload(); seasons.reload(); confs.reload(); reload(); };
@@ -184,8 +273,8 @@ export function TeamManager() {
             <li key={s.id} className="flex items-center gap-2 py-1.5 text-sm"><b>{s.name}</b><span className="text-ink-400">{s.weeks} weeks</span>{s.is_current ? <Badge tone="green">Current</Badge> : <Button size="sm" variant="ghost" onClick={() => act.run(async () => { await api.patch(`/admin/seasons/${s.id}`, { isCurrent: true }); refresh(); })}>Make current</Button>}
               {s.id !== seasonId && <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSeason(s.id)}>Work on this season</Button>}</li>))}
             {!seasons.data?.seasons.length && <li className="py-2 text-sm text-ink-400">No seasons yet. Create the first one to begin.</li>}</ul>
-          <form className="grid grid-cols-[5rem_1fr_5rem_auto] items-end gap-2" onSubmit={(e) => { e.preventDefault(); act.run(async () => { const r = await api.post('/admin/seasons', { year: Number(ns.year), name: ns.name || `${ns.year} Season`, weeks: Number(ns.weeks), isCurrent: !seasons.data?.seasons.length }); if (!seasonId) setSeason(r.id); setNs({ ...ns, name: '' }); refresh(); }); }}>
-            <Field label="Year"><Input value={ns.year} onChange={(e) => setNs({ ...ns, year: e.target.value })} /></Field><Field label="Name"><Input value={ns.name} placeholder={`${ns.year} Season`} onChange={(e) => setNs({ ...ns, name: e.target.value })} /></Field><Field label="Weeks"><Input value={ns.weeks} onChange={(e) => setNs({ ...ns, weeks: e.target.value })} /></Field><Button busy={act.busy}>Add season</Button>
+          <form className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[5rem_1fr_5rem_9.5rem_auto]" onSubmit={(e) => { e.preventDefault(); act.run(async () => { const r = await api.post('/admin/seasons', { year: Number(ns.year), name: ns.name || `${ns.year} Season`, weeks: Number(ns.weeks), startDate: ns.startDate || null, isCurrent: !seasons.data?.seasons.length }); if (!seasonId) setSeason(r.id); setNs({ ...ns, name: '' }); refresh(); }); }}>
+            <Field label="Year"><Input value={ns.year} onChange={(e) => setNs({ ...ns, year: e.target.value })} /></Field><Field label="Name"><Input value={ns.name} placeholder={`${ns.year} Season`} onChange={(e) => setNs({ ...ns, name: e.target.value })} /></Field><Field label="Weeks"><Input value={ns.weeks} onChange={(e) => setNs({ ...ns, weeks: e.target.value })} /></Field><Field label="Week 1 Saturday"><Input type="date" value={ns.startDate} onChange={(e) => setNs({ ...ns, startDate: e.target.value })} /></Field><Button busy={act.busy}>Add season</Button>
           </form>
         </Card>
         <Card title="Conferences">
@@ -197,14 +286,13 @@ export function TeamManager() {
           </form>
         </Card>
       </div>
-      {seasonId && <Load q={q}>{(d) => !d.teams.length ? <Card><Empty>No teams yet. Add the league's teams — names, colors, logos, ratings and schemes are all yours to set.</Empty></Card> : (
+      {seasonId && <Load q={q}>{(d) => !d.teams.length ? <Card><Empty>No teams yet. Add the league's teams — names, colors, logos and schemes are all yours to set.</Empty></Card> : (
         <Card title={`Teams (${d.teams.filter((t: Row) => t.in_season).length} in ${meta?.season?.name})`} pad={false}><div className="scroll-x"><table className="w-full min-w-[820px]">
-          <thead><tr className="border-b border-ink-700"><th className={th}>Team</th><th className={th}>Conference</th><th className={thr}>Off</th><th className={thr}>Def</th><th className={thr}>ST</th><th className={th}>Offense</th><th className={th}>Defense</th><th className={thr}>Roster</th><th className={thr} /></tr></thead>
+          <thead><tr className="border-b border-ink-700"><th className={th}>Team</th><th className={th}>Conference</th><th className={th}>Offense</th><th className={th}>Defense</th><th className={thr}>Roster</th><th className={thr} /></tr></thead>
           <tbody>{d.teams.map((t: Row) => (
             <tr key={t.id} className={cx('border-b border-ink-800 last:border-0', !t.in_season && 'opacity-55')}>
               <td className={td}><span className="flex items-center gap-2"><TeamLogo team={{ abbr: t.abbr, color: t.primary_color, color2: t.secondary_color, logo: t.logo }} size={26} /><b>{t.name}</b><span className="text-xs text-ink-400">{t.abbr}</span></span></td>
               <td className={td}>{t.in_season ? t.conference_name ?? 'Independent' : <Badge>Not in this season</Badge>}</td>
-              <td className={tdr}>{t.off_rating ?? '—'}</td><td className={tdr}>{t.def_rating ?? '—'}</td><td className={tdr}>{t.st_rating ?? '—'}</td>
               <td className={td}>{t.off_scheme ?? '—'}{t.run_pct != null && <span className="text-xs text-ink-400"> · {t.run_pct}% run</span>}</td><td className={td}>{t.def_scheme ?? '—'}</td>
               <td className={tdr}>{t.activeCount}{t.rosterCount !== t.activeCount && <span className="text-xs text-ink-400"> / {t.rosterCount}</span>}</td>
               <td className={cx(td, 'text-right')}><span className="inline-flex gap-1.5"><Button size="sm" onClick={() => setEdit(t)}>Edit</Button><Button size="sm" variant="ghost" onClick={() => confirm(`Delete ${t.name}? This is only possible for a team with no games and no roster.`) && act.run(async () => { await api.del(`/admin/teams/${t.id}`); refresh(); })}>Delete</Button></span></td>
@@ -217,11 +305,11 @@ export function TeamManager() {
 // ================================================================== ROSTER MANAGER
 function PlayerForm({ player, teamId, onClose, onSaved }: { player: Row | null; teamId: string; onClose: () => void; onSaved: () => void }) {
   const { seasonId } = useSeason();
-  const [f, setF] = useState<Row>(() => ({ name: player?.name ?? '', jersey: player?.jersey ?? '', position: player?.position ?? 'QB', secondary: (player?.secondary_positions ?? []) as string[], depth: player?.depth_rank ?? 1, rating: player?.rating ?? '', active: player?.active ?? true, awards: (player?.awards ?? []).join('\n') }));
+  const [f, setF] = useState<Row>(() => ({ name: player?.name ?? '', jersey: player?.jersey ?? '', position: player?.position ?? 'QB', secondary: (player?.secondary_positions ?? []) as string[], depth: player?.depth_rank ?? 1, active: player?.active ?? true, awards: (player?.awards ?? []).join('\n') }));
   const act = useAction();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
   const save = () => act.run(async () => {
-    const b = { name: f.name, jersey: numOr(String(f.jersey), null), position: f.position, secondary: f.secondary.filter((p: string) => p !== f.position), depth: Number(f.depth) || 1, rating: numOr(String(f.rating), null), active: f.active };
+    const b = { name: f.name, jersey: numOr(String(f.jersey), null), position: f.position, secondary: f.secondary.filter((p: string) => p !== f.position), depth: Number(f.depth) || 1, active: f.active };
     if (player) await api.patch(`/admin/roster/${player.id}`, { ...b, awards: String(f.awards).split('\n').map((s) => s.trim()).filter(Boolean) });
     else await api.post('/admin/roster', { ...b, seasonId, teamId });
     onSaved();
@@ -233,7 +321,6 @@ function PlayerForm({ player, teamId, onClose, onSaved }: { player: Row | null; 
         <Field label="Jersey"><Input inputMode="numeric" value={f.jersey} onChange={(e) => set('jersey', e.target.value.replace(/\D/g, ''))} /></Field>
         <Field label="Primary position" className="sm:col-span-2"><Select value={f.position} onChange={(e) => set('position', e.target.value)}>{POSITIONS.map((p) => <option key={p}>{p}</option>)}</Select></Field>
         <Field label="Depth rank" hint="1 = starter"><Input type="number" min={1} max={9} value={f.depth} onChange={(e) => set('depth', e.target.value)} /></Field>
-        <Field label="Rating" hint="40–99, optional"><Input inputMode="numeric" value={f.rating} onChange={(e) => set('rating', e.target.value.replace(/\D/g, ''))} /></Field>
         <div className="sm:col-span-4">
           <p className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-300">Secondary positions <span className="normal-case text-ink-400">— a player may earn statistics at any position listed here</span></p>
           <div className="flex flex-wrap gap-1">{POSITIONS.filter((p) => p !== f.position).map((p) => { const on = f.secondary.includes(p); return <button key={p} type="button" onClick={() => set('secondary', on ? f.secondary.filter((x: string) => x !== p) : [...f.secondary, p])} className={cx('rounded px-2 py-1 text-xs font-semibold', on ? 'bg-gold text-ink-950' : 'bg-ink-700 text-ink-200 hover:bg-ink-600')}>{p}</button>; })}</div>
@@ -261,7 +348,7 @@ export function RosterManager() {
       <div className="flex flex-wrap items-end gap-3">
         <h1 className="font-display text-3xl font-bold uppercase">Roster Manager</h1>
         <Field label="Team" className="ml-auto w-64"><Select value={teamId} onChange={(e) => setTeamId(e.target.value)}>{meta?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
-        <Button onClick={() => setCsv('name,jersey,position,secondary,depth,rating\n')} disabled={!teamId}>Import CSV</Button>
+        <Button onClick={() => setCsv('')} disabled={!teamId}>Import players</Button>
         <Button variant="primary" onClick={() => setEdit('new')} disabled={!teamId}>Add a player</Button>
       </div>
       {!meta?.teams.length && <Notice>Add teams to this season in Team Manager first.</Notice>}
@@ -277,21 +364,48 @@ export function RosterManager() {
           {others.length > 0 && <div className="flex justify-center gap-2">{others.map((s) => <Button key={s.id} size="sm" onClick={() => act.run(async () => { await api.post('/admin/roster/copy', { fromSeasonId: s.id, toSeasonId: seasonId, teamId }); q.reload(); })}>Carry over the {s.name} roster</Button>)}</div>}
         </Card>) : (
         <Card pad={false}><div className="scroll-x"><table className="w-full min-w-[640px]">
-          <thead><tr className="border-b border-ink-700"><th className={th}>#</th><th className={th}>Player</th><th className={th}>Pos</th><th className={th}>Secondary</th><th className={thr}>Depth</th><th className={thr}>Rating</th><th className={th}>Status</th><th className={thr} /></tr></thead>
+          <thead><tr className="border-b border-ink-700"><th className={th}>#</th><th className={th}>Player</th><th className={th}>Pos</th><th className={th}>Secondary</th><th className={thr}>Depth</th><th className={th}>Status</th><th className={thr} /></tr></thead>
           <tbody>{d.players.map((p: Row) => (
             <tr key={p.id} className={cx('border-b border-ink-800 last:border-0', !p.active && 'opacity-55')}>
               <td className={cx(td, 'tnum text-ink-400')}>{p.jersey ?? ''}</td><td className={cx(td, 'font-medium')}>{p.name}</td><td className={td}><Badge>{p.position}</Badge></td><td className={cx(td, 'text-ink-300')}>{p.secondary_positions.join(', ')}</td>
-              <td className={tdr}>{p.depth_rank}</td><td className={tdr}>{p.rating ?? '—'}</td><td className={td}>{p.active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}</td>
+              <td className={tdr}>{p.depth_rank}</td><td className={td}>{p.active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}</td>
               <td className={cx(td, 'text-right')}><span className="inline-flex gap-1.5"><Button size="sm" onClick={() => setEdit(p)}>Edit</Button><Button size="sm" variant="ghost" onClick={() => act.run(async () => { await api.patch(`/admin/roster/${p.id}`, { active: !p.active }); q.reload(); })}>{p.active ? 'Deactivate' : 'Activate'}</Button><Button size="sm" variant="ghost" onClick={() => confirm(`Remove ${p.name} from the roster?`) && act.run(async () => { await api.del(`/admin/roster/${p.id}`); q.reload(); })}>Remove</Button></span></td>
             </tr>))}</tbody></table></div></Card>)}</Load>}
       {edit && <PlayerForm player={edit === 'new' ? null : edit} teamId={teamId} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); q.reload(); }} />}
-      {csv !== null && (
-        <Modal wide title="Import a roster from CSV" onClose={() => setCsv(null)}>
-          <p className="mb-2 text-sm text-ink-300">Columns: <code>name, jersey, position, secondary, depth, rating, active</code>. Only <code>name</code> and <code>position</code> are required. Separate several secondary positions with a slash (QB/FS). If any row is invalid, nothing is imported.</p>
-          <Textarea rows={12} value={csv} onChange={(e) => setCsv(e.target.value)} spellCheck={false} />
-          <ErrorBox className="mt-2" error={act.error} />
-          <div className="mt-3 flex justify-end gap-2"><Button variant="ghost" onClick={() => setCsv(null)}>Cancel</Button><Button variant="primary" busy={act.busy} onClick={() => act.run(async () => { await api.post('/admin/roster/import', { seasonId, teamId, csv }); setCsv(null); q.reload(); })}>Import players</Button></div>
-        </Modal>)}
+      {csv !== null && <RosterImport teamId={teamId} text={csv} setText={setCsv} onDone={() => { setCsv(null); q.reload(); }} />}
     </div>
+  );
+}
+
+function RosterImport({ teamId, text, setText, onDone }: { teamId: string; text: string; setText: (v: string | null) => void; onDone: () => void }) {
+  const { seasonId, meta } = useSeason();
+  const [preview, setPreview] = useState<Row[] | null>(null);
+  const act = useAction();
+  const run = (dryRun: boolean) => act.run(async () => {
+    const r = await api.post('/admin/roster/import', { seasonId, teamId, csv: text, dryRun });
+    if (dryRun) setPreview(r.players); else onDone();
+  });
+  return (
+    <Modal wide title={`Import players — ${meta?.teams.find((t) => t.id === teamId)?.name ?? ''}`} onClose={() => setText(null)}>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-ink-700 bg-ink-900 p-3 text-sm text-ink-200">
+          <p>One player per line: <code className="text-gold-soft">name,positions,jersey</code></p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink-300">
+            <li>Two positions? Separate them with a slash: <b>QB/FS</b>. The first one is the main position.</li>
+            <li>Jersey number is optional.</li>
+            <li>Depth order follows the order of the lines (after players already on the roster).</li>
+          </ul>
+          <pre className="mt-2 rounded bg-ink-950 p-2 text-xs text-ink-200">{'Ash,QB,7\nWaterboy,WR/KR,11\nStone,LB\nRiver,QB/FS,3'}</pre>
+        </div>
+        <Textarea rows={12} value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} spellCheck={false} placeholder="Ash,QB,7" />
+        <ErrorBox error={act.error} />
+        {preview && (
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-emerald-500/40">
+            <p className="sticky top-0 bg-emerald-950 px-3 py-1.5 text-sm text-emerald-100">{preview.length} player{preview.length === 1 ? '' : 's'} ready to import</p>
+            <table className="w-full"><tbody>{preview.map((p, i) => <tr key={i} className="border-t border-ink-800"><td className={cx(td, 'tnum text-ink-400')}>{p.jersey ?? ''}</td><td className={td}>{p.name}</td><td className={td}><Badge>{p.position}</Badge>{p.secondary.map((x: string) => <Badge key={x} className="ml-1">{x}</Badge>)}</td><td className={cx(td, 'text-xs text-ink-400')}>depth {p.depth}</td></tr>)}</tbody></table>
+          </div>)}
+        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setText(null)}>Cancel</Button><Button busy={act.busy} disabled={!text.trim()} onClick={() => run(true)}>Check</Button><Button variant="primary" busy={act.busy} disabled={!preview?.length} onClick={() => run(false)}>Import {preview?.length ?? ''} players</Button></div>
+      </div>
+    </Modal>
   );
 }

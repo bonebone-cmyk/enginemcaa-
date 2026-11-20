@@ -58,8 +58,8 @@ export async function seedLeague(admin: Client, abbrs = ['AAA', 'BBB', 'CCC', 'D
     const t = makeTeam(abbr);
     const id = (await admin.post('/admin/teams', { name: t.name, shortName: abbr, abbr, primaryColor: '#123456', secondaryColor: '#ffffff' })).json.id as string;
     teams[abbr] = id;
-    await admin.put(`/admin/teams/${id}/season`, { seasonId: season, conferenceId: confs[i % 2], offRating: 75, defRating: 75, stRating: 70 });
-    const csv = ['name,jersey,position,secondary,depth,rating', ...t.roster.map((p) => `${p.name},${p.jersey},${p.position},${p.secondary.join('/')},${p.depth},${p.rating}`)].join('\n');
+    await admin.put(`/admin/teams/${id}/season`, { seasonId: season, conferenceId: confs[i % 2] });
+    const csv = t.roster.map((p) => `${p.name},${[p.position, ...p.secondary].join('/')},${p.jersey}`).join('\n');
     const imp = await admin.post('/admin/roster/import', { seasonId: season, teamId: id, csv });
     if (imp.status !== 201) throw new Error(`roster import failed: ${JSON.stringify(imp.json)}`);
     const r = (await admin.get(`/admin/roster?season=${season}&team=${id}`)).json.players as { player_id: string; position: string; depth_rank: number }[];

@@ -129,4 +129,17 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
   single numbers, so statistics can never disagree with the play ledger.
 - Laterals and blocked punts are not generated. Blocked field goals, safeties, team rushing losses and defensive/return
   touchdowns are.
-- The football model is tuned on synthetic rosters; expect to adjust team ratings (40–99) to taste after a few weeks.
+- There are no team or player overall ratings. Every team plays from the same baseline; results come from the
+  Activity / Upset / Star percentages, offensive and defensive schemes, home field, depth charts and chance.
+
+## Quick imports
+
+- **Season calendar** (Schedule Manager): pick the week 1 Saturday. Every week after is the next Saturday, and the
+  championship week is played two weeks after the week before it. Changing the date re-dates every game.
+- **Games** (Schedule Manager → Import games): one per line, `week,away,home,time` — time is `noon`, `3:30`, `6:30`,
+  `7:30` or `10:30` Eastern (blank = TBD). Optional tags after the time: `gotw rivalry primetime championship playoff
+  bowl neutral`. Example: `1,TUL,FRS,7:30,gotw`
+- **Players** (Roster Manager → Import players): one per line, `name,positions,jersey` — two positions with a slash
+  (`QB/FS`), jersey optional. Example: `Ash,QB/FS,7`
+- Both imports have a **Check** button that previews everything first; if any line is wrong, nothing is saved and
+  each problem line is listed.

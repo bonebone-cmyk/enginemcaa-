@@ -48,6 +48,11 @@ export interface TeamInput {
   tempo: Tempo;
   roster: RosterPlayer[];
   pct: Percentages;
+  /**
+   * Strength used only to decide who is the underdog for the Upset check. Defaults to (offRating + defRating) / 2.
+   * The league site has no team ratings, so it passes a value derived from the team's win-loss record.
+   */
+  upsetBasis?: number;
   /** Pre-game record, used only for recap wording. */
   record?: { w: number; l: number };
 }

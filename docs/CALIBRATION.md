@@ -40,7 +40,9 @@ Outside the range, left as is:
 
 ## Strength matters, without guarantees
 
-Home team stronger by this many rating points (offense and defense), 1,000 games each:
+The league site no longer uses team or player overall ratings, so on the site every team starts from the same
+baseline. The engine still supports ratings internally; the table below measures that engine behavior (home team
+stronger by this many rating points, 1,000 games each):
 
 | Rating gap | Stronger team wins |
 | --- | --- |

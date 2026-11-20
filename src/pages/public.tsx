@@ -35,7 +35,7 @@ function Featured({ g }: { g: Game }) {
           {side(g.home, 'right')}
         </div>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-sm text-white/80">
-          <span>{fmtKick(g.kickoffAt)}</span>
+          <span>{fmtKick(g.kickoffAt, g.kickoffSlot)}</span>
           {g.network && <span className="inline-flex items-center gap-1"><Tv className="size-4" />{g.network}</span>}
           {g.stadium && <span className="inline-flex items-center gap-1"><MapPin className="size-4" />{g.stadium}{g.neutralSite ? ' (neutral site)' : ''}</span>}
           <Link to={`/games/${g.id}`} className="font-semibold text-gold-soft hover:underline">Game page →</Link>
@@ -122,7 +122,7 @@ export function Home() {
                   {d.upcoming.length ? <ul className="divide-y divide-ink-700">{d.upcoming.map((g: Game) => (
                     <li key={g.id}><Link to={`/games/${g.id}`} className="flex items-center gap-2 py-2 text-sm hover:text-gold-soft">
                       <TeamLogo team={g.away} size={20} /><span className="min-w-0 flex-1 truncate"><Rank n={g.away.rank} />{g.away.short} at <Rank n={g.home.rank} />{g.home.short}</span><TeamLogo team={g.home} size={20} />
-                      <span className="w-24 text-right text-xs text-ink-400">Wk {g.week} · {g.kickoffAt ? fmtTime(g.kickoffAt) : 'TBD'}</span>
+                      <span className="w-32 text-right text-xs text-ink-400">Wk {g.week} · {fmtTime(g.kickoffAt, g.kickoffSlot)}</span>
                     </Link></li>))}</ul> : <Empty>Nothing on the calendar.</Empty>}
                 </Card>
               </div>
@@ -161,7 +161,7 @@ export function Schedule() {
         {(d) => {
           if (!d.games.length) return <Empty>No games match these filters.</Empty>;
           const groups = new Map<string, Game[]>();
-          for (const g of d.games) { const k = `${g.week}|${g.kickoffAt ? new Date(g.kickoffAt).toDateString() : ''}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(g); }
+          for (const g of d.games) { const k = `${g.week}|${fmtDay(g.kickoffAt)}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(g); }
           return <div className="space-y-5">{[...groups.entries()].map(([k, gs]) => (
             <section key={k}>
               <h2 className="mb-2 font-display text-lg font-semibold uppercase tracking-wide text-ink-200">Week {gs[0].week} <span className="text-ink-400">· {fmtDay(gs[0].kickoffAt)}</span></h2>
@@ -170,7 +170,7 @@ export function Schedule() {
                   const fin = g.status === 'final' || g.status === 'in_progress';
                   return (
                     <Link key={g.id} to={`/games/${g.id}`} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-ink-700 px-3 py-2.5 last:border-0 hover:bg-ink-800 sm:grid-cols-[5rem_1fr_auto_10rem]">
-                      <span className="hidden text-sm text-ink-300 tnum sm:block">{g.status === 'scheduled' ? fmtTime(g.kickoffAt) : ''}</span>
+                      <span className="hidden text-sm text-ink-300 tnum sm:block">{g.status === 'scheduled' ? fmtTime(g.kickoffAt, g.kickoffSlot) : ''}</span>
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         <TeamLogo team={g.away} size={22} /><span className="font-display text-lg font-semibold"><Rank n={g.away.rank} />{g.away.short}</span>
                         {fin && <span className="font-display text-lg font-bold tnum">{g.away.score}</span>}

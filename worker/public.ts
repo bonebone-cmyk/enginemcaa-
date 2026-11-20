@@ -45,7 +45,7 @@ publicRoutes.get('/meta', async (c) => {
   const [teams, ws, conferences] = await Promise.all([teamsForSeason(db, season.id), weekState(db, season, at), all(db, 'SELECT * FROM conferences ORDER BY name')]);
   return c.json({
     seasons: seasons.map((s) => ({ id: s.id, year: s.year, name: s.name, current: !!s.is_current, weeks: s.weeks })),
-    season: { id: season.id, year: season.year, name: season.name, weeks: season.weeks },
+    season: { id: season.id, year: season.year, name: season.name, weeks: season.weeks, startDate: season.start_date, championshipWeek: season.championship_week },
     weeks: ws.weeks, currentWeek: ws.current, conferences,
     teams: teams.filter((t) => t.in_season).map((t) => ({ id: t.id, name: t.name, short: t.short_name, abbr: t.abbr, color: t.primary_color, color2: t.secondary_color, logo: logoUrl(t), conferenceId: t.conference_id, conference: t.conference_abbr })),
   });

@@ -1,17 +1,18 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
+import { SLOT_LABEL, type KickoffSlot } from '../engine/schedule';
 import { qs, useApi } from './api';
 import { Badge, Select, cx } from './ui';
 
 // ------------------------------------------------------------------ types returned by the public API
 export interface TeamRef { id: string; name: string; short: string; abbr: string; color: string; color2: string; logo: string | null; rank: number | null; record: string; confRecord?: string; score: number | null }
 export interface Game {
-  id: string; seasonId: string; week: number; status: string; mode: string; kickoffAt: number | null; network: string | null; stadium: string | null; neutralSite: boolean;
+  id: string; seasonId: string; week: number; status: string; mode: string; kickoffAt: number | null; kickoffSlot: string | null; network: string | null; stadium: string | null; neutralSite: boolean;
   designations: string[]; away: TeamRef; home: TeamRef; period: string | null; clock: string | null; replay: boolean; manualLive: boolean; hasResult: boolean;
 }
 export interface Meta {
   seasons: { id: string; year: number; name: string; current: boolean; weeks: number }[];
-  season: { id: string; year: number; name: string; weeks: number } | null;
+  season: { id: string; year: number; name: string; weeks: number; startDate: string | null; championshipWeek: number | null } | null;
   weeks: number[]; currentWeek: number;
   conferences: { id: string; name: string; abbr: string }[];
   teams: { id: string; name: string; short: string; abbr: string; color: string; color2: string; logo: string | null; conferenceId: string | null; conference: string | null }[];
@@ -47,9 +48,19 @@ export function SeasonSelect({ className }: { className?: string }) {
 }
 
 // ------------------------------------------------------------------ formatting
-export const fmtKick = (ms: number | null) => (ms ? new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Time TBD');
-export const fmtTime = (ms: number | null) => (ms ? new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'TBD');
-export const fmtDay = (ms: number | null) => (ms ? new Date(ms).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) : 'Date to be announced');
+// All kickoff times are shown in Eastern time, the time the league schedules in.
+const ET = 'America/New_York';
+export function fmtTime(ms: number | null, slot?: string | null): string {
+  if (slot === 'tbd') return 'TBD';
+  if (slot && slot in SLOT_LABEL) return `${SLOT_LABEL[slot as KickoffSlot]} ET`;
+  return ms ? `${new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: ET })} ET` : 'TBD';
+}
+export const fmtDay = (ms: number | null) => (ms ? new Date(ms).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: ET }) : 'Date to be announced');
+export function fmtKick(ms: number | null, slot?: string | null): string {
+  const time = slot === 'tbd' || (!slot && !ms) ? 'Time TBD' : fmtTime(ms, slot);
+  if (!ms) return time;
+  return `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: ET })} · ${time}`;
+}
 export const fmtClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 export const periodLabel = (q: number) => (q <= 4 ? `Q${q}` : q === 5 ? 'OT' : `${q - 4}OT`);
 export const fmtAgo = (ms: number, now = Date.now()) => {
@@ -72,7 +83,7 @@ export function statusText(g: Game): string {
   if (g.status === 'in_progress') return [g.period, g.clock].filter(Boolean).join(' ') || 'In progress';
   if (g.status === 'postponed') return 'Postponed';
   if (g.status === 'canceled') return 'Canceled';
-  return fmtKick(g.kickoffAt);
+  return fmtKick(g.kickoffAt, g.kickoffSlot);
 }
 export function StatusPill({ g }: { g: Game }) {
   if (g.status === 'in_progress')
@@ -82,7 +93,7 @@ export function StatusPill({ g }: { g: Game }) {
   if (g.status === 'final') return <Badge tone="neutral">Final</Badge>;
   if (g.status === 'postponed') return <Badge tone="gold">Postponed</Badge>;
   if (g.status === 'canceled') return <Badge tone="red">Canceled</Badge>;
-  return <span className="text-xs text-ink-300">{fmtKick(g.kickoffAt)}</span>;
+  return <span className="text-xs text-ink-300">{fmtKick(g.kickoffAt, g.kickoffSlot)}</span>;
 }
 
 // ------------------------------------------------------------------ team identity

@@ -2,7 +2,8 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { allValid, checkPrimetimeInput, checkRoster, describePlay, finalize, rebuildDrives, reconstructPrimetime, simulateGame } from '../engine/index';
-import { DEF_SCHEMES, LOCKABLE_PLAYER_STATS, OFF_SCHEMES, POSITIONS, SimError, TEMPOS, type GameResult, type Play, type PrimetimeInput, type SimConfig, type TeamInput } from '../engine/types';
+import { gameKickoff, isSaturday, parseSlot, SLOT_LABEL, type KickoffSlot } from '../engine/schedule';
+import { DEF_SCHEMES, LOCKABLE_PLAYER_STATS, OFF_SCHEMES, POSITIONS, SimError, TEMPOS, type GameResult, type Play, type Position, type PrimetimeInput, type SimConfig, type TeamInput } from '../engine/types';
 import { aiRecap, extractScreenshots } from './ai';
 import { HttpError, auditStmt, type AdminUser, type AppEnv } from './auth';
 import { all, assertStmt, clearAssert, first, j, now, stmt, uid, type DB } from './db';
@@ -21,30 +22,49 @@ const position = z.enum(POSITIONS);
 
 // ---------------------------------------------------------------------------------- seasons & conferences
 adminRoutes.get('/seasons', async (c) => c.json({ seasons: await all(c.env.DB, 'SELECT * FROM seasons ORDER BY year DESC') }));
-const seasonSchema = z.object({ year: z.number().int().min(1900).max(3000), name: z.string().trim().min(1).max(60), weeks: z.number().int().min(1).max(30).default(14), isCurrent: z.boolean().default(false) });
+const saturday = z.string().refine(isSaturday, 'The season start date must be a Saturday (YYYY-MM-DD).');
+const seasonSchema = z.object({
+  year: z.number().int().min(1900).max(3000), name: z.string().trim().min(1).max(60), weeks: z.number().int().min(1).max(30).default(14), isCurrent: z.boolean().default(false),
+  startDate: saturday.nullable().default(null), championshipWeek: z.number().int().min(2).max(30).nullable().default(null),
+});
+
+/** Re-date every game in a season that has a kickoff slot, after the start date, week count or championship week changes. */
+async function redateStmts(db: DB, season: Pick<SeasonRow, 'id' | 'start_date' | 'championship_week' | 'weeks'>): Promise<D1PreparedStatement[]> {
+  const games = await all<{ id: string; week: number; kickoff_slot: string }>(db, 'SELECT id, week, kickoff_slot FROM games WHERE season_id = ?1 AND kickoff_slot IS NOT NULL', season.id);
+  return games.map((g) => stmt(db, 'UPDATE games SET kickoff_at = ?1, updated_at = ?2 WHERE id = ?3', gameKickoff(season, g.week, g.kickoff_slot as KickoffSlot), now(), g.id));
+}
+
 adminRoutes.post('/seasons', async (c) => {
   const b = await body(c, seasonSchema);
   const db = c.env.DB;
   if (await first(db, 'SELECT 1 FROM seasons WHERE year = ?1', b.year)) throw new HttpError(409, `A ${b.year} season already exists.`);
+  if (b.championshipWeek != null && b.championshipWeek > b.weeks) throw new HttpError(422, 'The championship week must be one of the season\'s weeks.');
   const id = uid();
   const isFirst = !(await first(db, 'SELECT 1 FROM seasons LIMIT 1'));
   const cur = b.isCurrent || isFirst;
   await db.batch([
     ...(cur ? [stmt(db, 'UPDATE seasons SET is_current = 0')] : []),
-    stmt(db, 'INSERT INTO seasons (id, year, name, is_current, weeks, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)', id, b.year, b.name, cur ? 1 : 0, b.weeks, now()),
+    stmt(db, 'INSERT INTO seasons (id, year, name, is_current, weeks, start_date, championship_week, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)', id, b.year, b.name, cur ? 1 : 0, b.weeks, b.startDate, b.championshipWeek, now()),
     log(c, { action: 'season_created', entity: 'season', entityId: id, next: b }),
   ]);
   return c.json({ id }, 201);
 });
 adminRoutes.patch('/seasons/:id', async (c) => {
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(60).optional(), weeks: z.number().int().min(1).max(30).optional(), isCurrent: z.boolean().optional() }));
+  const b = await body(c, z.object({
+    name: z.string().trim().min(1).max(60).optional(), weeks: z.number().int().min(1).max(30).optional(), isCurrent: z.boolean().optional(),
+    startDate: saturday.nullable().optional(), championshipWeek: z.number().int().min(2).max(30).nullable().optional(),
+  }));
   const db = c.env.DB;
   const s = await first<SeasonRow>(db, 'SELECT * FROM seasons WHERE id = ?1', c.req.param('id'));
   if (!s) throw new HttpError(404, 'Season not found.');
+  const next = { ...s, weeks: b.weeks ?? s.weeks, start_date: b.startDate === undefined ? s.start_date : b.startDate, championship_week: b.championshipWeek === undefined ? s.championship_week : b.championshipWeek };
+  if (next.championship_week != null && next.championship_week > next.weeks) throw new HttpError(422, 'The championship week must be one of the season\'s weeks.');
+  const calendarChanged = next.weeks !== s.weeks || next.start_date !== s.start_date || next.championship_week !== s.championship_week;
   await db.batch([
     ...(b.isCurrent ? [stmt(db, 'UPDATE seasons SET is_current = 0')] : []),
-    stmt(db, 'UPDATE seasons SET name = ?1, weeks = ?2, is_current = ?3 WHERE id = ?4', b.name ?? s.name, b.weeks ?? s.weeks, b.isCurrent ?? !!s.is_current ? 1 : 0, s.id),
-    log(c, { action: 'season_updated', entity: 'season', entityId: s.id, previous: { name: s.name, weeks: s.weeks, isCurrent: !!s.is_current }, next: b }),
+    stmt(db, 'UPDATE seasons SET name = ?1, weeks = ?2, is_current = ?3, start_date = ?4, championship_week = ?5 WHERE id = ?6', b.name ?? s.name, next.weeks, b.isCurrent ?? !!s.is_current ? 1 : 0, next.start_date, next.championship_week, s.id),
+    ...(calendarChanged ? await redateStmts(db, next) : []),
+    log(c, { action: 'season_updated', entity: 'season', entityId: s.id, previous: { name: s.name, weeks: s.weeks, isCurrent: !!s.is_current, startDate: s.start_date, championshipWeek: s.championship_week }, next: b }),
   ]);
   return c.json({ ok: true });
 });
@@ -120,7 +140,6 @@ adminRoutes.delete('/teams/:id', async (c) => {
 });
 const teamSeasonSchema = z.object({
   seasonId: z.string(), conferenceId: z.string().nullable().default(null),
-  offRating: z.number().min(40).max(99).default(70), defRating: z.number().min(40).max(99).default(70), stRating: z.number().min(40).max(99).default(70),
   offScheme: z.enum(OFF_SCHEMES).default('Balanced'), defScheme: z.enum(DEF_SCHEMES).default('4-3'), runPct: z.number().min(5).max(95).nullable().default(null), tempo: z.enum(TEMPOS).default('normal'),
 });
 adminRoutes.put('/teams/:id/season', async (c) => {
@@ -130,9 +149,9 @@ adminRoutes.put('/teams/:id/season', async (c) => {
   if (!(await first(db, 'SELECT 1 FROM teams WHERE id = ?1', id))) throw new HttpError(404, 'Team not found.');
   const prev = await first(db, 'SELECT * FROM team_seasons WHERE team_id = ?1 AND season_id = ?2', id, b.seasonId);
   await db.batch([
-    stmt(db, `INSERT INTO team_seasons (id, team_id, season_id, conference_id, off_rating, def_rating, st_rating, off_scheme, def_scheme, run_pct, tempo) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-      ON CONFLICT (team_id, season_id) DO UPDATE SET conference_id = excluded.conference_id, off_rating = excluded.off_rating, def_rating = excluded.def_rating, st_rating = excluded.st_rating, off_scheme = excluded.off_scheme, def_scheme = excluded.def_scheme, run_pct = excluded.run_pct, tempo = excluded.tempo`,
-      uid(), id, b.seasonId, b.conferenceId, b.offRating, b.defRating, b.stRating, b.offScheme, b.defScheme, b.runPct, b.tempo),
+    stmt(db, `INSERT INTO team_seasons (id, team_id, season_id, conference_id, off_scheme, def_scheme, run_pct, tempo) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+      ON CONFLICT (team_id, season_id) DO UPDATE SET conference_id = excluded.conference_id, off_scheme = excluded.off_scheme, def_scheme = excluded.def_scheme, run_pct = excluded.run_pct, tempo = excluded.tempo`,
+      uid(), id, b.seasonId, b.conferenceId, b.offScheme, b.defScheme, b.runPct, b.tempo),
     log(c, { action: prev ? 'team_season_updated' : 'team_season_added', entity: 'team', entityId: id, previous: prev, next: b }),
   ]);
   return c.json({ ok: true });
@@ -149,7 +168,7 @@ adminRoutes.delete('/teams/:id/season', async (c) => {
 // ---------------------------------------------------------------------------------- rosters
 const rosterSchema = z.object({
   name: z.string().trim().min(1).max(60), jersey: z.number().int().min(0).max(99).nullable().default(null), position,
-  secondary: z.array(position).max(6).default([]), depth: z.number().int().min(1).max(9).default(1), rating: z.number().min(40).max(99).nullable().default(null), active: z.boolean().default(true),
+  secondary: z.array(position).max(6).default([]), depth: z.number().int().min(1).max(9).default(1), active: z.boolean().default(true),
 });
 adminRoutes.get('/roster', async (c) => {
   const season = await getSeason(c.env.DB, c.req.query('season'));
@@ -168,7 +187,7 @@ adminRoutes.post('/roster', async (c) => {
   const mid = uid();
   await db.batch([
     ...(b.playerId ? [] : [stmt(db, 'INSERT INTO players (id, name, created_at) VALUES (?1, ?2, ?3)', pid, b.name, now())]),
-    stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, rating, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)', mid, pid, b.teamId, b.seasonId, b.jersey, b.position, JSON.stringify(b.secondary.filter((p) => p !== b.position)), b.depth, b.rating, b.active ? 1 : 0),
+    stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)', mid, pid, b.teamId, b.seasonId, b.jersey, b.position, JSON.stringify(b.secondary.filter((p) => p !== b.position)), b.depth, b.active ? 1 : 0),
     log(c, { action: 'player_added', entity: 'player', entityId: pid, next: b }),
   ]);
   return c.json({ id: mid, playerId: pid }, 201);
@@ -181,8 +200,8 @@ adminRoutes.patch('/roster/:id', async (c) => {
   const pos = b.position ?? (m.position as string);
   await db.batch([
     ...(b.name ? [stmt(db, 'UPDATE players SET name = ?1 WHERE id = ?2', b.name, m.player_id)] : []),
-    stmt(db, 'UPDATE roster_memberships SET jersey = ?1, position = ?2, secondary_positions = ?3, depth_rank = ?4, rating = ?5, active = ?6, awards = ?7 WHERE id = ?8',
-      b.jersey === undefined ? m.jersey : b.jersey, pos, JSON.stringify((b.secondary ?? j<string[]>(m.secondary_positions as string, [])).filter((p) => p !== pos)), b.depth ?? m.depth_rank, b.rating === undefined ? m.rating : b.rating, b.active === undefined ? m.active : b.active ? 1 : 0, b.awards ? JSON.stringify(b.awards) : m.awards, m.id),
+    stmt(db, 'UPDATE roster_memberships SET jersey = ?1, position = ?2, secondary_positions = ?3, depth_rank = ?4, active = ?5, awards = ?6 WHERE id = ?7',
+      b.jersey === undefined ? m.jersey : b.jersey, pos, JSON.stringify((b.secondary ?? j<string[]>(m.secondary_positions as string, [])).filter((p) => p !== pos)), b.depth ?? m.depth_rank, b.active === undefined ? m.active : b.active ? 1 : 0, b.awards ? JSON.stringify(b.awards) : m.awards, m.id),
     log(c, { action: 'player_updated', entity: 'player', entityId: m.player_id as string, previous: m, next: b }),
   ]);
   return c.json({ ok: true });
@@ -202,37 +221,67 @@ adminRoutes.delete('/roster/:id', async (c) => {
   ]);
   return c.json({ ok: true });
 });
+/**
+ * Quick roster import. One player per line:  name,positions,jersey
+ *   positions: one or two positions separated by "/" (the first is the main position), e.g. QB or QB/FS
+ *   jersey: optional
+ * A header line ("name,positions,jersey") is optional. Depth order follows the order of the lines, after any
+ * players already on the roster at that position.
+ */
+export function parseRosterLines(text: string, existing: { name: string; position: string }[]): { players: { name: string; position: Position; secondary: Position[]; jersey: number | null; depth: number }[]; errors: string[] } {
+  const errors: string[] = [];
+  const players: { name: string; position: Position; secondary: Position[]; jersey: number | null; depth: number }[] = [];
+  const taken = new Set(existing.map((p) => p.name.toLowerCase()));
+  const depthAt = new Map<string, number>();
+  for (const p of existing) depthAt.set(p.position, (depthAt.get(p.position) ?? 0) + 1);
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  lines.forEach((line, i) => {
+    const cells = line.split(/\t|,/).map((x) => x.trim());
+    if (i === 0 && /^name$/i.test(cells[0]) && /^pos/i.test(cells[1] ?? '')) return;
+    const at = `Line ${i + 1} ("${line.slice(0, 40)}")`;
+    const [name, posText = '', jerseyText = '', ...rest] = cells;
+    if (rest.some((x) => x)) return void errors.push(`${at}: too many values. Use name,positions,jersey.`);
+    if (!name) return void errors.push(`${at}: the name is missing.`);
+    if (name.length > 60) return void errors.push(`${at}: the name is longer than 60 characters.`);
+    const pos = posText.toUpperCase().split(/[\/|+]/).map((x) => x.trim()).filter(Boolean);
+    if (!pos.length) return void errors.push(`${at}: the position is missing (for example QB, or QB/FS for two).`);
+    if (pos.length > 2) return void errors.push(`${at}: use one or two positions, like QB/FS.`);
+    const bad = pos.filter((x) => !(POSITIONS as readonly string[]).includes(x));
+    if (bad.length) return void errors.push(`${at}: "${bad.join('", "')}" is not a position. Use: ${POSITIONS.join(', ')}.`);
+    if (pos[0] === pos[1]) pos.pop();
+    let jersey: number | null = null;
+    if (jerseyText) {
+      const n = Number(jerseyText.replace(/^#/, ''));
+      if (!Number.isInteger(n) || n < 0 || n > 99) return void errors.push(`${at}: the jersey number must be 0–99.`);
+      jersey = n;
+    }
+    if (taken.has(name.toLowerCase())) return void errors.push(`${at}: ${name} is already on this roster${existing.some((p) => p.name.toLowerCase() === name.toLowerCase()) ? '' : ' (listed twice)'}.`);
+    taken.add(name.toLowerCase());
+    const depth = (depthAt.get(pos[0]) ?? 0) + 1;
+    depthAt.set(pos[0], depth);
+    players.push({ name, position: pos[0] as Position, secondary: pos.slice(1) as Position[], jersey, depth: Math.min(depth, 9) });
+  });
+  if (!lines.length) errors.push('Nothing to import. Put one player per line: name,positions,jersey');
+  return { players, errors };
+}
+
 adminRoutes.post('/roster/import', async (c) => {
-  const b = await body(c, z.object({ seasonId: z.string(), teamId: z.string(), csv: z.string().min(1).max(200_000) }));
+  const b = await body(c, z.object({ seasonId: z.string(), teamId: z.string(), csv: z.string().min(1).max(200_000), dryRun: z.boolean().default(false) }));
   const db = c.env.DB;
   if (!(await first(db, 'SELECT 1 FROM team_seasons WHERE team_id = ?1 AND season_id = ?2', b.teamId, b.seasonId))) throw new HttpError(422, 'Add the team to this season before importing its roster.');
-  const rows = parseCsv(b.csv);
-  const errors: string[] = [];
-  const existing = new Set((await roster(db, b.seasonId, b.teamId)).map((r) => r.name.toLowerCase()));
-  const parsed: z.infer<typeof rosterSchema>[] = [];
-  rows.forEach((r, i) => {
-    const num = (v?: string) => (v == null || v === '' ? null : Number(v));
-    const res = rosterSchema.safeParse({
-      name: r.name ?? r.player, jersey: num(r.jersey ?? r.number ?? r.no), position: (r.position ?? r.pos ?? '').toUpperCase(),
-      secondary: (r.secondary ?? r.secondarypositions ?? '').split(/[\/|\s]+/).map((s) => s.toUpperCase()).filter(Boolean), depth: num(r.depth ?? r.depthrank) ?? 1, rating: num(r.rating ?? r.ovr ?? r.overall),
-      active: !['0', 'no', 'false', 'inactive'].includes((r.active ?? '').toLowerCase()),
-    });
-    if (!res.success) return void errors.push(`Row ${i + 1}: ${res.error.issues.map((x) => `${x.path.join('.')} ${x.message}`).join('; ')}`);
-    if (existing.has(res.data.name.toLowerCase())) return void errors.push(`Row ${i + 1}: ${res.data.name} is already on this roster (or appears twice in the file).`);
-    existing.add(res.data.name.toLowerCase());
-    parsed.push(res.data);
-  });
-  if (!rows.length) errors.push('No rows found. Expected a header row: name, jersey, position, secondary, depth, rating.');
-  if (errors.length) throw new HttpError(422, 'The roster file has problems. Nothing was imported.', { details: errors });
+  const current = await roster(db, b.seasonId, b.teamId);
+  const { players, errors } = parseRosterLines(b.csv, current.map((r) => ({ name: r.name, position: r.position })));
+  if (errors.length) throw new HttpError(422, 'Some lines need fixing. Nothing was imported.', { details: errors });
+  if (b.dryRun) return c.json({ players });
   const stmts: D1PreparedStatement[] = [];
-  for (const p of parsed) {
+  for (const p of players) {
     const pid = uid();
     stmts.push(stmt(db, 'INSERT INTO players (id, name, created_at) VALUES (?1, ?2, ?3)', pid, p.name, now()));
-    stmts.push(stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, rating, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)', uid(), pid, b.teamId, b.seasonId, p.jersey, p.position, JSON.stringify(p.secondary.filter((s) => s !== p.position)), p.depth, p.rating, p.active ? 1 : 0));
+    stmts.push(stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)', uid(), pid, b.teamId, b.seasonId, p.jersey, p.position, JSON.stringify(p.secondary), p.depth));
   }
-  stmts.push(log(c, { action: 'roster_imported', entity: 'team', entityId: b.teamId, next: { seasonId: b.seasonId, players: parsed.length } }));
+  stmts.push(log(c, { action: 'roster_imported', entity: 'team', entityId: b.teamId, next: { seasonId: b.seasonId, players: players.length } }));
   await db.batch(stmts);
-  return c.json({ imported: parsed.length }, 201);
+  return c.json({ imported: players.length }, 201);
 });
 adminRoutes.post('/roster/copy', async (c) => {
   const b = await body(c, z.object({ fromSeasonId: z.string(), toSeasonId: z.string(), teamId: z.string() }));
@@ -243,7 +292,7 @@ adminRoutes.post('/roster/copy', async (c) => {
   const add = src.filter((r) => !taken.has(r.player_id));
   if (!add.length) throw new HttpError(409, 'There are no players to carry over.');
   await db.batch([
-    ...add.map((r) => stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, rating, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)', uid(), r.player_id, b.teamId, b.toSeasonId, r.jersey, r.position, r.secondary_positions, r.depth_rank, r.rating, r.active)),
+    ...add.map((r) => stmt(db, 'INSERT INTO roster_memberships (id, player_id, team_id, season_id, jersey, position, secondary_positions, depth_rank, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)', uid(), r.player_id, b.teamId, b.toSeasonId, r.jersey, r.position, r.secondary_positions, r.depth_rank, r.active)),
     log(c, { action: 'roster_carried_over', entity: 'team', entityId: b.teamId, next: { ...b, players: add.length } }),
   ]);
   return c.json({ copied: add.length });
@@ -252,7 +301,7 @@ adminRoutes.post('/roster/copy', async (c) => {
 // ---------------------------------------------------------------------------------- schedule
 const gameSchema = z.object({
   seasonId: z.string(), week: z.number().int().min(0).max(40), awayTeamId: z.string(), homeTeamId: z.string(),
-  kickoffAt: z.number().int().nullable().default(null), network: z.string().trim().max(40).nullable().default(null), stadium: z.string().trim().max(80).nullable().default(null),
+  time: z.string().max(20).default('tbd').refine((v) => parseSlot(v) !== null, `Game time must be one of: ${Object.values(SLOT_LABEL).join(', ')}.`), network: z.string().trim().max(40).nullable().default(null), stadium: z.string().trim().max(80).nullable().default(null),
   neutralSite: z.boolean().default(false), mode: z.enum(['sim', 'primetime']).default('sim'), designations: z.array(z.enum(DESIGNATIONS)).default([]), allowDuplicate: z.boolean().default(false),
 });
 async function assertNoDuplicate(db: DB, seasonId: string, week: number, a: string, h: string, exceptId: string | null, allow: boolean) {
@@ -294,11 +343,67 @@ adminRoutes.post('/games', async (c) => {
   await assertNoDuplicate(db, b.seasonId, b.week, b.awayTeamId, b.homeTeamId, null, b.allowDuplicate);
   const id = uid();
   const des = [...new Set(b.mode === 'primetime' ? [...b.designations, 'primetime' as const] : b.designations)];
+  const season = await getSeason(db, b.seasonId);
+  const slot = parseSlot(b.time)!;
   await db.batch([
-    stmt(db, 'INSERT INTO games (id, season_id, week, away_team_id, home_team_id, kickoff_at, network, stadium, neutral_site, mode, designations, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)', id, b.seasonId, b.week, b.awayTeamId, b.homeTeamId, b.kickoffAt, b.network, b.stadium, b.neutralSite ? 1 : 0, b.mode, JSON.stringify(des), now()),
+    stmt(db, 'INSERT INTO games (id, season_id, week, away_team_id, home_team_id, kickoff_at, kickoff_slot, network, stadium, neutral_site, mode, designations, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)',
+      id, b.seasonId, b.week, b.awayTeamId, b.homeTeamId, gameKickoff(season, b.week, slot), slot, b.network, b.stadium, b.neutralSite ? 1 : 0, b.mode, JSON.stringify(des), now()),
     log(c, { action: 'game_created', entity: 'game', entityId: id, gameId: id, next: b }),
   ]);
   return c.json({ id }, 201);
+});
+/**
+ * Quick schedule import. One game per line:  week,away,home,time,tags
+ *   away/home: team abbreviation, short name or full name
+ *   time: noon, 3:30, 6:30, 7:30, 10:30 (Eastern) — optional, blank means TBD
+ *   tags: optional, any of gotw rivalry primetime championship playoff bowl neutral (separate with spaces or /)
+ * A header line is optional. The date comes from the week and the season's start date.
+ */
+const TAGS: Record<string, string> = { gotw: 'gotw', 'game of the week': 'gotw', rivalry: 'rivalry', primetime: 'primetime', cfb27: 'primetime', championship: 'conference_championship', 'conference championship': 'conference_championship', playoff: 'playoff', bowl: 'bowl', neutral: 'neutral' };
+adminRoutes.post('/games/import', async (c) => {
+  const b = await body(c, z.object({ seasonId: z.string(), text: z.string().min(1).max(200_000), dryRun: z.boolean().default(false) }));
+  const db = c.env.DB;
+  const season = await getSeason(db, b.seasonId);
+  const teams = (await teamsForSeason(db, season.id)).filter((t) => t.in_season);
+  const byKey = new Map<string, (typeof teams)[number]>();
+  for (const t of teams) for (const k of [t.abbr, t.short_name, t.name, t.id]) byKey.set(k.toLowerCase(), t);
+  const existing = await all<{ week: number; away_team_id: string; home_team_id: string }>(db, "SELECT week, away_team_id, home_team_id FROM games WHERE season_id = ?1 AND status <> 'canceled'", season.id);
+  const busy = new Set(existing.flatMap((g) => [`${g.week}|${g.away_team_id}`, `${g.week}|${g.home_team_id}`]));
+  const errors: string[] = [];
+  const games: { week: number; away: string; home: string; awayName: string; homeName: string; slot: KickoffSlot; designations: string[]; neutral: boolean; kickoffAt: number | null }[] = [];
+  const lines = b.text.replace(/^﻿/, '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  lines.forEach((line, i) => {
+    const cells = line.split(/\t|,/).map((x) => x.trim());
+    if (i === 0 && /^(wk|week)$/i.test(cells[0])) return;
+    const at = `Line ${i + 1} ("${line.slice(0, 40)}")`;
+    const week = Number(String(cells[0] ?? '').replace(/^w(ee)?k\s*/i, ''));
+    if (!Number.isInteger(week) || week < 0 || week > 40) return void errors.push(`${at}: the week must be a number.`);
+    const away = byKey.get((cells[1] ?? '').toLowerCase()), home = byKey.get((cells[2] ?? '').toLowerCase());
+    if (!away) return void errors.push(`${at}: "${cells[1] ?? ''}" is not a team in this season.`);
+    if (!home) return void errors.push(`${at}: "${cells[2] ?? ''}" is not a team in this season.`);
+    if (away.id === home.id) return void errors.push(`${at}: a team cannot play itself.`);
+    const slot = parseSlot(cells[3]);
+    if (!slot) return void errors.push(`${at}: "${cells[3]}" is not a game time. Use noon, 3:30, 6:30, 7:30 or 10:30 (or leave it blank for TBD).`);
+    const tags = (cells.slice(4).join(' ')).toLowerCase().split(/[\s\/;|]+/).filter(Boolean);
+    const unknown = tags.filter((t) => !TAGS[t]);
+    if (unknown.length) return void errors.push(`${at}: unknown tag "${unknown.join('", "')}". Tags: gotw, rivalry, primetime, championship, playoff, bowl, neutral.`);
+    for (const t of [away, home]) {
+      if (busy.has(`${week}|${t.id}`)) return void errors.push(`${at}: ${t.name} already has a game in week ${week}.`);
+    }
+    busy.add(`${week}|${away.id}`); busy.add(`${week}|${home.id}`);
+    const des = [...new Set(tags.map((t) => TAGS[t]).filter((t) => t !== 'neutral'))];
+    games.push({ week, away: away.id, home: home.id, awayName: away.name, homeName: home.name, slot, designations: des, neutral: tags.includes('neutral'), kickoffAt: gameKickoff(season, week, slot) });
+  });
+  if (!lines.length) errors.push('Nothing to import. Put one game per line: week,away,home,time');
+  if (errors.length) throw new HttpError(422, 'Some lines need fixing. Nothing was imported.', { details: errors });
+  if (b.dryRun) return c.json({ games });
+  const t = now();
+  await db.batch([
+    ...games.map((g) => stmt(db, 'INSERT INTO games (id, season_id, week, away_team_id, home_team_id, kickoff_at, kickoff_slot, neutral_site, mode, designations, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)',
+      uid(), season.id, g.week, g.away, g.home, g.kickoffAt, g.slot, g.neutral ? 1 : 0, g.designations.includes('primetime') ? 'primetime' : 'sim', JSON.stringify(g.designations), t)),
+    log(c, { action: 'schedule_imported', entity: 'season', entityId: season.id, next: { games: games.length } }),
+  ]);
+  return c.json({ imported: games.length }, 201);
 });
 adminRoutes.patch('/games/:id', async (c) => {
   const b = await body(c, gameSchema.partial().omit({ seasonId: true }).extend({
@@ -323,10 +428,14 @@ adminRoutes.patch('/games/:id', async (c) => {
   const mode = b.mode ?? g.mode;
   let des = b.designations ?? j<string[]>(g.designations, []);
   if (mode === 'primetime' && !des.includes('primetime')) des = [...des, 'primetime'];
+  // Kickoff = the week's Saturday + the chosen time. Older games without a time slot keep their date until a time is picked.
+  const slot = (b.time !== undefined ? parseSlot(b.time) : (g.kickoff_slot as KickoffSlot | null)) ?? null;
+  const kickoffAt = slot ? gameKickoff(await getSeason(db, g.season_id), week, slot) : g.kickoff_at;
   await db.batch([
+    stmt(db, 'UPDATE games SET kickoff_slot = ?1 WHERE id = ?2', slot, g.id),
     stmt(db, `UPDATE games SET week = ?1, away_team_id = ?2, home_team_id = ?3, kickoff_at = ?4, network = ?5, stadium = ?6, neutral_site = ?7, mode = ?8, designations = ?9, status = ?10,
       live_away = ?11, live_home = ?12, live_period = ?13, live_clock = ?14, updated_at = ?15 WHERE id = ?16`,
-      week, away, home, b.kickoffAt === undefined ? g.kickoff_at : b.kickoffAt, b.network === undefined ? g.network : b.network, b.stadium === undefined ? g.stadium : b.stadium, (b.neutralSite ?? !!g.neutral_site) ? 1 : 0, published ? g.mode : mode, JSON.stringify(des), status,
+      week, away, home, kickoffAt, b.network === undefined ? g.network : b.network, b.stadium === undefined ? g.stadium : b.stadium, (b.neutralSite ?? !!g.neutral_site) ? 1 : 0, published ? g.mode : mode, JSON.stringify(des), status,
       live ? (b.liveAway === undefined ? g.live_away : b.liveAway) : null, live ? (b.liveHome === undefined ? g.live_home : b.liveHome) : null, live ? (b.livePeriod === undefined ? g.live_period : b.livePeriod) : null, live ? (b.liveClock === undefined ? g.live_clock : b.liveClock) : null, now(), g.id),
     log(c, { action: b.status === 'canceled' ? 'game_canceled' : live && (b.liveAway !== undefined || b.liveHome !== undefined) ? 'live_score_entered' : 'game_updated', entity: 'game', entityId: g.id, gameId: g.id, previous: { ...g, designations: j(g.designations, []) }, next: b, reason: b.reason ?? null }),
   ]);

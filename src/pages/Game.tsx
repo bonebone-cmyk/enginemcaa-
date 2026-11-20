@@ -44,7 +44,7 @@ function Scoreboard({ g, quarters, labels }: { g: GameT; quarters: [number[], nu
             </table>
           </div>
         )}
-        <p className="mt-3 text-center text-xs text-white/65">{[fmtKick(g.kickoffAt), g.network, g.stadium && `${g.stadium}${g.neutralSite ? ' (neutral site)' : ''}`].filter(Boolean).join(' · ')}</p>
+        <p className="mt-3 text-center text-xs text-white/65">{[fmtKick(g.kickoffAt, g.kickoffSlot), g.network, g.stadium && `${g.stadium}${g.neutralSite ? ' (neutral site)' : ''}`].filter(Boolean).join(' · ')}</p>
       </div>
     </section>
   );

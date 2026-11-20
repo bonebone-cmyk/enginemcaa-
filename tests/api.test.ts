@@ -192,6 +192,78 @@ describe('league data, percentages and scheduling', () => {
   });
 });
 
+describe('quick imports and the season calendar', () => {
+  it('imports games in one go, dated from the season calendar', async () => {
+    // Season starts Saturday Sept 5 2026; the championship (week 13) comes two weeks after week 12.
+    expect((await admin.patch(`/admin/seasons/${L.season}`, { startDate: '2026-09-06' })).status).toBe(400); // a Sunday
+    expect((await admin.patch(`/admin/seasons/${L.season}`, { startDate: '2026-09-05', weeks: 14, championshipWeek: 13 })).status).toBe(200);
+    const text = 'week,away,home,time\n10,AAA,DDD,noon\n10,BBB Testers,CCC,7:30,gotw rivalry\n11,CCC,AAA,10:30,neutral\n13,DDD,BBB,,championship';
+    const dry = await admin.post('/admin/games/import', { seasonId: L.season, text, dryRun: true });
+    expect(dry.status).toBe(200);
+    expect(dry.json.games).toHaveLength(4);
+    expect((await admin.get(`/admin/games?season=${L.season}&week=10`)).json.games).toHaveLength(0); // dry run saved nothing
+    const r = await admin.post('/admin/games/import', { seasonId: L.season, text });
+    expect(r.status).toBe(201);
+    expect(r.json.imported).toBe(4);
+    const games = (await pub.get('/schedule')).json.games.filter((g: any) => [10, 11, 13].includes(g.week));
+    const at = (w: number, a: string) => games.find((g: any) => g.week === w && g.away.abbr === a);
+    expect(new Date(at(10, 'AAA').kickoffAt).toISOString()).toBe('2026-11-07T17:00:00.000Z'); // noon EST
+    expect(at(10, 'BBB').designations).toEqual(['gotw', 'rivalry']);
+    expect(at(11, 'CCC').neutralSite).toBe(true);
+    expect(new Date(at(13, 'DDD').kickoffAt).toISOString().slice(0, 10)).toBe('2026-12-05'); // week 12 (Nov 21) + 2 weeks
+    expect(at(13, 'DDD').kickoffSlot).toBe('tbd');
+    // Moving the start date re-dates every game.
+    await admin.patch(`/admin/seasons/${L.season}`, { startDate: '2026-08-29' });
+    const moved = (await pub.get('/schedule?week=10')).json.games.find((g: any) => g.away.abbr === 'AAA');
+    expect(new Date(moved.kickoffAt).toISOString()).toBe('2026-10-31T16:00:00.000Z'); // noon EDT
+    // Clean up so later tests see the same schedule as before.
+    for (const g of games) await admin.del(`/admin/games/${g.id}`);
+  });
+  it('rejects a schedule file with any bad line and saves nothing', async () => {
+    const before = (await admin.get(`/admin/games?season=${L.season}`)).json.games.length;
+    const r = await admin.post('/admin/games/import', { seasonId: L.season, text: '5,AAA,BBB,4:00\n5,ZZZ,CCC,noon\n5,AAA,AAA,noon\n6,AAA,BBB,noon\n6,AAA,CCC,3:30\n7,CCC,DDD,noon,party' });
+    expect(r.status).toBe(422);
+    const msg = r.json.details.join(' ');
+    expect(msg).toMatch(/"4:00" is not a game time/);
+    expect(msg).toMatch(/"ZZZ" is not a team/);
+    expect(msg).toMatch(/cannot play itself/);
+    expect(msg).toMatch(/already has a game in week 6/);
+    expect(msg).toMatch(/unknown tag "party"/);
+    expect((await admin.get(`/admin/games?season=${L.season}`)).json.games.length).toBe(before);
+  });
+  it('sets a single game to one of the five times', async () => {
+    const id = (await admin.post('/admin/games', { seasonId: L.season, week: 9, awayTeamId: L.teams.AAA, homeTeamId: L.teams.BBB, time: '6:30' })).json.id;
+    expect((await admin.post('/admin/games', { seasonId: L.season, week: 9, awayTeamId: L.teams.CCC, homeTeamId: L.teams.DDD, time: '5:00' })).status).toBe(400);
+    let g = (await admin.get(`/admin/games?season=${L.season}&week=9`)).json.games[0];
+    expect(g.kickoff_slot).toBe('18:30');
+    expect((await admin.patch(`/admin/games/${id}`, { time: '10:30' })).status).toBe(200);
+    g = (await admin.get(`/admin/games?season=${L.season}&week=9`)).json.games[0];
+    expect(g.kickoff_slot).toBe('22:30');
+    await admin.del(`/admin/games/${id}`);
+  });
+  it('imports players from name,positions,jersey lines', async () => {
+    const team = L.teams.CCC;
+    const before = (await admin.get(`/admin/roster?season=${L.season}&team=${team}`)).json.players.length;
+    const bad = await admin.post('/admin/roster/import', { seasonId: L.season, teamId: team, csv: 'New One,QB\nNew Two,ZZ' });
+    expect(bad.status).toBe(422);
+    expect((await admin.get(`/admin/roster?season=${L.season}&team=${team}`)).json.players.length).toBe(before);
+    const ok = await admin.post('/admin/roster/import', { seasonId: L.season, teamId: team, csv: 'New Passer,QB/FS,99\nNew Lineman,LT' });
+    expect(ok.json.imported).toBe(2);
+    const roster = (await admin.get(`/admin/roster?season=${L.season}&team=${team}`)).json.players;
+    const np = roster.find((p: any) => p.name === 'New Passer');
+    expect(np).toMatchObject({ position: 'QB', secondary_positions: ['FS'], jersey: 99, depth_rank: 3, active: true });
+    expect(np).not.toHaveProperty('rating');
+    for (const p of roster.filter((x: any) => x.name.startsWith('New '))) await admin.del(`/admin/roster/${p.id}`);
+  });
+  it('has no team or player overall ratings anymore', async () => {
+    const teams = (await admin.get(`/admin/teams?season=${L.season}`)).json.teams;
+    expect(teams[0]).not.toHaveProperty('off_rating');
+    const cols = (await env.DB.prepare("SELECT name FROM pragma_table_info('team_seasons') UNION ALL SELECT name FROM pragma_table_info('roster_memberships')").all()).results.map((r: any) => r.name);
+    expect(cols).not.toContain('off_rating');
+    expect(cols).not.toContain('rating');
+  });
+});
+
 describe('simulation, review and publishing', () => {
   let runId: string, final: [number, number];
   it('simulates reproducibly from a seed and stores the percentage snapshot used', async () => {

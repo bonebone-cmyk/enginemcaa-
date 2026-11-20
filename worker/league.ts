@@ -4,9 +4,9 @@ import { DEFAULT_CONFIG, POSITIONS, type Position, type RosterPlayer, type SimCo
 import { HttpError } from './auth';
 import { all, first, j, type DB } from './db';
 
-export interface SeasonRow { id: string; year: number; name: string; is_current: number; weeks: number }
+export interface SeasonRow { id: string; year: number; name: string; is_current: number; weeks: number; start_date: string | null; championship_week: number | null }
 export interface GameRow {
-  id: string; season_id: string; week: number; away_team_id: string; home_team_id: string; kickoff_at: number | null; network: string | null; stadium: string | null;
+  id: string; season_id: string; week: number; away_team_id: string; home_team_id: string; kickoff_at: number | null; kickoff_slot: string | null; network: string | null; stadium: string | null;
   neutral_site: number; status: string; mode: 'sim' | 'primetime'; designations: string; away_score: number | null; home_score: number | null; final_at: number | null;
   published_run_id: string | null; presentation_started_at: number | null; presentation_ms_per_play: number | null;
   live_away: number | null; live_home: number | null; live_period: string | null; live_clock: string | null; created_at: number; updated_at: number;
@@ -14,7 +14,7 @@ export interface GameRow {
 export interface TeamRow {
   id: string; name: string; short_name: string; abbr: string; mascot: string | null; primary_color: string; secondary_color: string; has_logo: number; stadium: string | null;
   conference_id: string | null; conference_name: string | null; conference_abbr: string | null;
-  off_rating: number | null; def_rating: number | null; st_rating: number | null; off_scheme: string | null; def_scheme: string | null; run_pct: number | null; tempo: string | null; in_season: number;
+  off_scheme: string | null; def_scheme: string | null; run_pct: number | null; tempo: string | null; in_season: number;
 }
 
 export async function getSeason(db: DB, idOrYear?: string | null): Promise<SeasonRow> {
@@ -27,7 +27,7 @@ export async function getSeason(db: DB, idOrYear?: string | null): Promise<Seaso
 
 export async function teamsForSeason(db: DB, seasonId: string, onlyInSeason = false): Promise<TeamRow[]> {
   return all<TeamRow>(db, `SELECT t.id, t.name, t.short_name, t.abbr, t.mascot, t.primary_color, t.secondary_color, (t.logo IS NOT NULL) AS has_logo, t.stadium,
-      ts.conference_id, c.name AS conference_name, c.abbr AS conference_abbr, ts.off_rating, ts.def_rating, ts.st_rating, ts.off_scheme, ts.def_scheme, ts.run_pct, ts.tempo, (ts.id IS NOT NULL) AS in_season
+      ts.conference_id, c.name AS conference_name, c.abbr AS conference_abbr, ts.off_scheme, ts.def_scheme, ts.run_pct, ts.tempo, (ts.id IS NOT NULL) AS in_season
     FROM teams t LEFT JOIN team_seasons ts ON ts.team_id = t.id AND ts.season_id = ?1 LEFT JOIN conferences c ON c.id = ts.conference_id
     ${onlyInSeason ? 'WHERE ts.id IS NOT NULL' : ''} ORDER BY t.name`, seasonId);
 }
@@ -75,7 +75,7 @@ export async function simConfig(db: DB, seasonId: string): Promise<SimConfig> {
   return { ...DEFAULT_CONFIG, ...j<Partial<SimConfig>>(row?.config, {}) };
 }
 
-export interface RosterRow { id: string; player_id: string; name: string; team_id: string; season_id: string; jersey: number | null; position: string; secondary_positions: string; depth_rank: number; rating: number | null; active: number; awards: string }
+export interface RosterRow { id: string; player_id: string; name: string; team_id: string; season_id: string; jersey: number | null; position: string; secondary_positions: string; depth_rank: number; active: number; awards: string }
 
 export async function roster(db: DB, seasonId: string, teamId: string): Promise<RosterRow[]> {
   return all<RosterRow>(db, 'SELECT rm.*, p.name FROM roster_memberships rm JOIN players p ON p.id = rm.player_id WHERE rm.season_id = ?1 AND rm.team_id = ?2 ORDER BY rm.position, rm.depth_rank, p.name', seasonId, teamId);
@@ -85,17 +85,20 @@ export function toRosterPlayers(rows: RosterRow[]): RosterPlayer[] {
   return rows.map((r) => ({
     id: r.player_id, name: r.name, jersey: r.jersey, position: r.position as Position,
     secondary: j<string[]>(r.secondary_positions, []).filter((p) => (POSITIONS as readonly string[]).includes(p)) as Position[],
-    depth: r.depth_rank, rating: r.rating, active: !!r.active,
+    depth: r.depth_rank, rating: null, active: !!r.active,
   }));
 }
 
 export async function teamInput(db: DB, seasonId: string, teamId: string, pct: { activity: number; upset: number; star: number } | null, rec?: TeamRecord): Promise<TeamInput> {
-  const t = await first<TeamRow>(db, `SELECT t.id, t.name, t.short_name, t.abbr, ts.off_rating, ts.def_rating, ts.st_rating, ts.off_scheme, ts.def_scheme, ts.run_pct, ts.tempo, (ts.id IS NOT NULL) AS in_season
+  const t = await first<TeamRow>(db, `SELECT t.id, t.name, t.short_name, t.abbr, ts.off_scheme, ts.def_scheme, ts.run_pct, ts.tempo, (ts.id IS NOT NULL) AS in_season
     FROM teams t LEFT JOIN team_seasons ts ON ts.team_id = t.id AND ts.season_id = ?1 WHERE t.id = ?2`, seasonId, teamId);
   if (!t) throw new HttpError(404, 'Team not found.');
   if (!t.in_season) throw new HttpError(422, `${t.name} is not entered in this season. Add the team to the season in Team Manager.`);
   return {
-    id: t.id, name: t.name, abbr: t.abbr, offRating: t.off_rating ?? 70, defRating: t.def_rating ?? 70, stRating: t.st_rating ?? 70,
+    // There are no team or player overall ratings: every team plays from the same baseline, and results come from
+    // percentages, schemes, home field, depth charts and chance. The underdog for the Upset check is decided by record.
+    id: t.id, name: t.name, abbr: t.abbr, offRating: 70, defRating: 70, stRating: 70,
+    upsetBasis: rec && rec.w + rec.l > 0 ? 70 + (rec.w / (rec.w + rec.l) - 0.5) * 10 : 70,
     offScheme: (t.off_scheme ?? 'Balanced') as TeamInput['offScheme'], defScheme: (t.def_scheme ?? '4-3') as TeamInput['defScheme'],
     runPct: t.run_pct, tempo: (t.tempo ?? 'normal') as TeamInput['tempo'],
     roster: toRosterPlayers(await roster(db, seasonId, teamId)),
@@ -109,7 +112,7 @@ export const recordText = (r?: TeamRecord) => (r ? `${r.w}-${r.l}` : '0-0');
 
 export interface PublicTeamRef { id: string; name: string; short: string; abbr: string; color: string; color2: string; logo: string | null; rank: number | null; record: string; confRecord: string; score: number | null }
 export interface PublicGame {
-  id: string; seasonId: string; week: number; status: string; mode: string; kickoffAt: number | null; network: string | null; stadium: string | null; neutralSite: boolean;
+  id: string; seasonId: string; week: number; status: string; mode: string; kickoffAt: number | null; kickoffSlot: string | null; network: string | null; stadium: string | null; neutralSite: boolean;
   designations: string[]; away: PublicTeamRef; home: PublicTeamRef; period: string | null; clock: string | null; replay: boolean; manualLive: boolean; hasResult: boolean;
 }
 
@@ -141,7 +144,7 @@ export async function publicGames(db: DB, games: GameRow[], teams: TeamRow[], re
       as = g.live_away; hs = g.live_home; period = g.live_period; clock = g.live_clock;
     } else if (g.status !== 'final') (as = null), (hs = null);
     out.push({
-      id: g.id, seasonId: g.season_id, week: g.week, status, mode: g.mode, kickoffAt: g.kickoff_at, network: g.network, stadium: g.stadium ?? tm.get(g.home_team_id)?.stadium ?? null, neutralSite: !!g.neutral_site,
+      id: g.id, seasonId: g.season_id, week: g.week, status, mode: g.mode, kickoffAt: g.kickoff_at, kickoffSlot: g.kickoff_slot, network: g.network, stadium: g.stadium ?? tm.get(g.home_team_id)?.stadium ?? null, neutralSite: !!g.neutral_site,
       designations: j<string[]>(g.designations, []), away: ref(g.away_team_id, as), home: ref(g.home_team_id, hs), period, clock, replay, manualLive, hasResult: g.status === 'final' && !replay,
     });
   }

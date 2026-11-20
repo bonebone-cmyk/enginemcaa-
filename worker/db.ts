@@ -32,7 +32,7 @@ export const MIGRATIONS: string[][] = [
     `CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, short_name TEXT NOT NULL, abbr TEXT NOT NULL UNIQUE, mascot TEXT,
        primary_color TEXT NOT NULL DEFAULT '#1e3a5f', secondary_color TEXT NOT NULL DEFAULT '#ffffff', logo TEXT, stadium TEXT, created_at INTEGER NOT NULL)`,
     `CREATE TABLE team_seasons (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), season_id TEXT NOT NULL REFERENCES seasons(id), conference_id TEXT REFERENCES conferences(id),
-       off_rating REAL NOT NULL DEFAULT 70, def_rating REAL NOT NULL DEFAULT 70, st_rating REAL NOT NULL DEFAULT 70,
+       off_rating REAL NOT NULL DEFAULT 70, def_rating REAL NOT NULL DEFAULT 70, st_rating REAL NOT NULL DEFAULT 70, /* dropped in migration 4 */
        off_scheme TEXT NOT NULL DEFAULT 'Balanced', def_scheme TEXT NOT NULL DEFAULT '4-3', run_pct REAL, tempo TEXT NOT NULL DEFAULT 'normal',
        UNIQUE (team_id, season_id))`,
     `CREATE TABLE players (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL)`,
@@ -125,6 +125,16 @@ export const MIGRATIONS: string[][] = [
     `INSERT INTO users (id, email, name, role_id, password_hash, password_salt, password_iter, created_at)
        VALUES ('code-admin', 'code-access@mcaa.invalid', 'Code login', 'code_admin', '!', '!', 1, ${Date.UTC(2026, 10, 18)})`,
     `ALTER TABLE sessions ADD COLUMN display_name TEXT`,
+  ],
+  // 4: Saturday calendar and kickoff slots; team and player overall ratings removed. All other data is kept.
+  [
+    `ALTER TABLE seasons ADD COLUMN start_date TEXT`,
+    `ALTER TABLE seasons ADD COLUMN championship_week INTEGER`,
+    `ALTER TABLE games ADD COLUMN kickoff_slot TEXT`,
+    `ALTER TABLE team_seasons DROP COLUMN off_rating`,
+    `ALTER TABLE team_seasons DROP COLUMN def_rating`,
+    `ALTER TABLE team_seasons DROP COLUMN st_rating`,
+    `ALTER TABLE roster_memberships DROP COLUMN rating`,
   ],
 ];
 

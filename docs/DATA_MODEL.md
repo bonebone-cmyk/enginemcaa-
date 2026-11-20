@@ -5,7 +5,7 @@ Defined in `worker/db.ts` and applied automatically. Append new migrations to `M
 | Table | Purpose |
 | --- | --- |
 | `roles`, `users`, `sessions`, `login_attempts` | Administrators. Trigger `users_max_four_admins` caps admin accounts at four; roles cannot be changed. |
-| `seasons`, `conferences`, `teams`, `team_seasons` | League structure. `team_seasons` holds per-season conference, ratings, schemes, run/pass ratio, tempo. |
+| `seasons`, `conferences`, `teams`, `team_seasons` | League structure. `team_seasons` holds per-season conference, schemes, run/pass ratio, tempo. `seasons` holds the week 1 Saturday (`start_date`) and `championship_week`; `games.kickoff_slot` holds the Eastern kickoff time (noon, 3:30, 6:30, 7:30, 10:30 or TBD). |
 | `players`, `roster_memberships`, view `depth_charts` | A player identity plus one membership per season: team, jersey, primary and secondary positions, depth rank, rating, active flag, awards. |
 | `game_statuses`, `games` | The schedule. One row per matchup; every page reads the same row. |
 | `team_percentages` | Current Activity / Upset / Star (plus extra categories) per team per season, edited by administrators. Values outside 0–100 are rejected by CHECK constraints. |
