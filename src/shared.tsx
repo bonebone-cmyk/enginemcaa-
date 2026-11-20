@@ -150,6 +150,7 @@ export function Layout({ children }: { children: ReactNode }) {
             ))}
           </nav>
           <SeasonSelect className="hidden !py-1 !text-xs sm:block" />
+          <Link to="/admin" className="whitespace-nowrap rounded-md border border-ink-600 px-2.5 py-1 text-xs font-semibold text-ink-200 hover:border-gold hover:text-gold-soft">Admin sign in</Link>
         </div>
       </header>
       <main className="mx-auto w-full max-w-7xl flex-1 px-3 py-5 sm:px-5">{children}</main>
