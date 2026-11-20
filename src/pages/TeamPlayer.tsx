@@ -69,7 +69,7 @@ export function TeamPage() {
                     <Card key={name} title={name} pad={false}>
                       {rows.length ? <table className="w-full"><thead><tr className="border-b border-ink-700"><th className={th}>#</th><th className={th}>Player</th><th className={th}>Pos</th><th className={thr}>Depth</th></tr></thead>
                         <tbody>{rows.map((p: Row) => <tr key={p.playerId} className={cx('border-b border-ink-800 last:border-0', !p.active && 'opacity-50')}>
-                          <td className={cx(td, 'tnum text-ink-400')}>{p.jersey ?? ''}</td><td className={td}><Link to={`/players/${p.playerId}`} className="font-medium hover:text-gold-soft">{p.name}</Link>{!p.active && <span className="ml-1 text-xs text-ink-400">(inactive)</span>}</td>
+                          <td className={cx(td, 'tnum text-ink-400')}>{p.jersey ?? ''}</td><td className={td}><Link to={`/players/${p.playerId}`} className="font-medium hover:text-gold-soft">{p.name}</Link>{!p.active && <span className="ml-1 text-xs text-ink-400">(inactive)</span>}{p.injury && <Badge tone="red" className="ml-1.5">Injured · out {p.injury.remaining} more game{p.injury.remaining === 1 ? '' : 's'}</Badge>}</td>
                           <td className={td}>{p.position}{p.secondary.length ? <span className="text-xs text-ink-400"> / {p.secondary.join(', ')}</span> : null}</td><td className={tdr}>{p.depth}</td></tr>)}</tbody></table> : <Empty>None rostered.</Empty>}
                     </Card>);
                 })}

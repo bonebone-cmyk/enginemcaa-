@@ -136,6 +136,13 @@ export const MIGRATIONS: string[][] = [
     `ALTER TABLE team_seasons DROP COLUMN st_rating`,
     `ALTER TABLE roster_memberships DROP COLUMN rating`,
   ],
+  // 5: injuries from published simulated games. A multi-game injury keeps the player out of the team's next games.
+  [
+    `CREATE TABLE injuries (game_id TEXT NOT NULL REFERENCES games(id), run_id TEXT NOT NULL, season_id TEXT NOT NULL, team_id TEXT NOT NULL, player_id TEXT NOT NULL REFERENCES players(id),
+       week INTEGER NOT NULL, play_seq INTEGER NOT NULL, quarter INTEGER NOT NULL, clock INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('quarter','game','games')),
+       games_out INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (game_id, play_seq))`,
+    `CREATE INDEX injuries_team ON injuries(season_id, team_id)`,
+  ],
 ];
 
 let ready: Promise<void> | null = null;

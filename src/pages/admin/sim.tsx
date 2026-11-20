@@ -6,7 +6,7 @@ import type { GameResult } from '../../../engine/types';
 import { ApiError, api, qs, useApi } from '../../api';
 import { TeamLogo, fmtAgo, useSeason, type TeamRef } from '../../shared';
 import { Badge, Button, Card, Check, Empty, ErrorBox, Field, Input, Load, Modal, Notice, Select, Tabs, cx, td, tdr, tdw, th, thr, useAction } from '../../ui';
-import { BoxScore, Highlights, PlayByPlay, ScoreChart, ScoringSummary, TeamStats } from '../Game';
+import { BoxScore, Highlights, InjuryList, PlayByPlay, ScoreChart, ScoringSummary, TeamStats } from '../Game';
 
 type Row = Record<string, any>;
 export const RUN_TONE: Record<string, 'gold' | 'green' | 'blue' | 'red' | 'neutral'> = { candidate: 'gold', approved: 'blue', published: 'green', rejected: 'red', superseded: 'neutral' };
@@ -274,6 +274,7 @@ export function RunDetail() {
           <Tabs value={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'box', label: 'Player stats' }, { id: 'team', label: 'Team stats' }, { id: 'scoring', label: 'Scoring' }, { id: 'highlights', label: `Highlights (${r.highlights.length})` }, { id: 'pbp', label: 'Play-by-play' }, { id: 'percentages', label: r.mode === 'sim' ? 'Percentages & seed' : 'Imported inputs' }]} />
           {tab === 'overview' && (
             <div className="grid gap-4 lg:grid-cols-2">
+              {(r.injuries ?? []).length > 0 && <div className="lg:col-span-2"><InjuryList teams={teams} list={(r.injuries ?? []).map((x) => ({ ...x, teamId: tid[x.side], name: d.players[x.playerId]?.name ?? x.playerId }))} /></div>}
               <Card title="Game recap">
                 <div className="mb-2 flex gap-1.5">{r.recap.reconstruction && <Badge tone="purple">Reconstruction-based summary</Badge>}<Badge>{r.recap.source === 'ai' ? 'AI-written, grounded in game data' : 'Standard recap'}</Badge></div>
                 <h3 className="font-display text-xl font-bold">{r.recap.headline}</h3>

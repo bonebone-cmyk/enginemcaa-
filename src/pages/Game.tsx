@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { injuryShort } from '../../engine/injuries';
 import { useApi } from '../api';
 import { Designations, Rank, StatusPill, TeamLogo, fmtClock, fmtKick, fmtTop, periodLabel, type Game as GameT, type TeamRef } from '../shared';
 import { Badge, Card, Empty, Load, Notice, Tabs, cx, td, tdr, th, thr } from '../ui';
@@ -226,6 +227,22 @@ export function PlayByPlay({ plays, drives, teams, newestFirst }: { plays: Row[]
   );
 }
 
+export function InjuryList({ list, teams }: { list: Row[]; teams: [TeamRef, TeamRef] }) {
+  return (
+    <Card title="Injuries" pad={false}>
+      <ul className="divide-y divide-ink-800">{list.map((x) => {
+        const t = teams.find((tm) => tm.id === x.teamId)!;
+        return (
+          <li key={x.playSeq} className="flex items-center gap-2 px-3 py-2 text-sm">
+            <TeamLogo team={t} size={20} />
+            <span className="min-w-0 flex-1"><Link to={`/players/${x.playerId}`} className="font-medium hover:text-gold-soft">{x.name}</Link><span className="block text-xs text-ink-400">{periodLabel(x.quarter)}{x.quarter <= 4 ? ` ${fmtClock(x.clock)}` : ''}</span></span>
+            <Badge tone={x.kind === 'games' ? (x.gamesOut >= 4 ? 'red' : 'gold') : 'neutral'}>{injuryShort(x as { kind: 'quarter' | 'game' | 'games'; gamesOut: number })}</Badge>
+          </li>);
+      })}</ul>
+    </Card>
+  );
+}
+
 export function Highlights({ list, teams, generated }: { list: Row[]; teams: [TeamRef, TeamRef]; generated?: string }) {
   if (!list.length) return <Empty>No highlights yet.</Empty>;
   return (
@@ -343,6 +360,7 @@ export function GamePage() {
                 </div>
                 <div className="space-y-4">
                   <Card title="Key moments"><Highlights list={[...r.highlights].sort((a: Row, b: Row) => a.rank - b.rank).slice(0, 5).sort((a: Row, b: Row) => a.playSeq - b.playSeq)} teams={teams} generated={prime ? 'Generated reconstruction — not observed gameplay.' : undefined} /></Card>
+                  {r.injuries?.length > 0 && <InjuryList list={r.injuries} teams={teams} />}
                 </div>
               </div>)}
             {tab === 'box' && <>{prime && <p className="text-xs text-ink-400">{d.labels.stats}.</p>}<BoxScore players={r.playerStats} teams={teams} primetime={prime} /></>}

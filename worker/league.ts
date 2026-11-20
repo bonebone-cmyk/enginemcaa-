@@ -150,3 +150,32 @@ export async function publicGames(db: DB, games: GameRow[], teams: TeamRow[], re
   }
   return out;
 }
+
+export interface OutPlayer { playerId: string; name: string; gamesOut: number; remaining: number; injuredWeek: number; gameId: string }
+
+/**
+ * Players on a team who are still out with an injury from an earlier official game, as of `game`.
+ * A player hurt for N games misses the team's next N games (canceled games do not count).
+ */
+export async function injuredOut(db: DB, teamId: string, game: { id: string; season_id: string; week: number }): Promise<OutPlayer[]> {
+  const rows = await all<{ player_id: string; name: string; games_out: number; week: number; game_id: string }>(db, `SELECT i.player_id, p.name, i.games_out, i.week, i.game_id FROM injuries i
+      JOIN games g ON g.id = i.game_id AND g.status = 'final' AND g.published_run_id IS NOT NULL JOIN players p ON p.id = i.player_id
+      WHERE i.season_id = ?1 AND i.team_id = ?2 AND i.games_out > 0 AND i.week < ?3`, game.season_id, teamId, game.week);
+  const out: OutPlayer[] = [];
+  for (const r of rows) {
+    const between = (await first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM games WHERE season_id = ?1 AND (away_team_id = ?2 OR home_team_id = ?2) AND status <> 'canceled' AND id <> ?3 AND week > ?4 AND week < ?5`,
+      game.season_id, teamId, game.id, r.week, game.week))!.n;
+    const remaining = r.games_out - between;
+    if (remaining > 0) out.push({ playerId: r.player_id, name: r.name, gamesOut: r.games_out, remaining, injuredWeek: r.week, gameId: r.game_id });
+  }
+  // A player with two overlapping injuries is listed once, with the longer absence.
+  return [...new Map(out.sort((a, b) => a.remaining - b.remaining).map((o) => [o.playerId, o])).values()];
+}
+
+/** The team's next game that has not been played (used to show who is currently out). */
+export async function nextGame(db: DB, seasonId: string, teamId: string) {
+  // The next unplayed game after the team's most recent result (an older postponed game does not count).
+  return first<{ id: string; season_id: string; week: number }>(db, `SELECT id, season_id, week FROM games WHERE season_id = ?1 AND (away_team_id = ?2 OR home_team_id = ?2) AND status IN ('scheduled','in_progress','postponed')
+      AND week > COALESCE((SELECT MAX(week) FROM games WHERE season_id = ?1 AND (away_team_id = ?2 OR home_team_id = ?2) AND status = 'final'), -1)
+      ORDER BY week, COALESCE(kickoff_at, 9e15) LIMIT 1`, seasonId, teamId);
+}

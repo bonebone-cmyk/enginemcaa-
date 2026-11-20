@@ -8,7 +8,7 @@ import type { GameRow } from './league';
 
 interface RunRow { id: string; game_id: string; mode: 'sim' | 'primetime'; status: string; valid: number; away_score: number; home_score: number; result: string }
 
-const MATERIALIZED = ['highlights', 'scoring_events', 'player_game_stats', 'team_game_stats', 'drives', 'play_events'];
+const MATERIALIZED = ['injuries', 'highlights', 'scoring_events', 'player_game_stats', 'team_game_stats', 'drives', 'play_events'];
 
 function materialize(db: DB, game: GameRow, runId: string, r: GameResult): D1PreparedStatement[] {
   const tid = [game.away_team_id, game.home_team_id];
@@ -25,6 +25,8 @@ function materialize(db: DB, game: GameRow, runId: string, r: GameResult): D1Pre
     r.playerStats.map((l) => ({ ...base, season_id: game.season_id, team_id: tid[l.side], player_id: l.playerId, locked_fields: Object.keys(locked[l.playerId] ?? {}), ...Object.fromEntries(PLAYER_STAT_COLS.map((c) => [c, (l as unknown as Record<string, number>)[c] ?? 0])) }))));
   out.push(insertRows(db, 'team_game_stats', ['game_id', 'run_id', 'season_id', 'team_id', 'opponent_id', 'is_home', ...TEAM_STAT_COLS],
     r.teamStats.map((t) => ({ ...base, season_id: game.season_id, team_id: tid[t.side], opponent_id: tid[1 - t.side], is_home: t.side, ...Object.fromEntries(TEAM_STAT_COLS.map((c) => [c, (t as unknown as Record<string, number>)[c] ?? 0])) }))));
+  out.push(insertRows(db, 'injuries', ['game_id', 'run_id', 'season_id', 'team_id', 'player_id', 'week', 'play_seq', 'quarter', 'clock', 'kind', 'games_out'],
+    (r.injuries ?? []).map((x) => ({ ...base, season_id: game.season_id, team_id: tid[x.side], player_id: x.playerId, week: game.week, play_seq: x.playSeq, quarter: x.quarter, clock: x.clock, kind: x.kind, games_out: x.gamesOut }))));
   out.push(insertRows(db, 'highlights', ['game_id', 'run_id', 'play_seq', 'quarter', 'clock', 'team_id', 'title', 'text', 'rank', 'tags'],
     r.highlights.map((h) => ({ ...base, play_seq: h.playSeq, quarter: h.quarter, clock: h.clock, team_id: tid[h.side], title: h.title, text: h.text, rank: h.rank, tags: h.tags }))));
   return out;

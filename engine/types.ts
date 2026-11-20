@@ -71,6 +71,13 @@ export interface SimConfig {
   /** Rating-point boost for a player whose Star check passes. */
   starBoost: number;
   allowInactive: boolean;
+  /**
+   * Chaos meter, 0–100. 25 is normal college football. Higher values widen each team's good-day/bad-day swing (more
+   * upsets), and make explosive plays, turnovers, return touchdowns and injuries more common and injuries more serious.
+   */
+  chaos: number;
+  /** Players can be injured during simulated games. Never applied to imported CFB 27 results. */
+  injuries: boolean;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -82,11 +89,17 @@ export const DEFAULT_CONFIG: SimConfig = {
   upsetGapClosure: 0.6,
   starBoost: 12,
   allowInactive: false,
+  chaos: 25,
+  injuries: true,
 };
 
 export type PlayType = 'kickoff' | 'run' | 'pass' | 'sack' | 'punt' | 'field_goal' | 'extra_point' | 'two_point' | 'kneel' | 'penalty' | 'timeout';
 
 export type ScoreKind = 'TD' | 'FG' | 'XP' | '2PT' | 'SAFETY';
+
+/** quarter: back next quarter. game: out for the rest of this game. games: rest of this game plus `gamesOut` more games. */
+export interface InjuryInfo { playerId: string; side: Side; kind: 'quarter' | 'game' | 'games'; gamesOut: number }
+export interface Injury extends InjuryInfo { playSeq: number; quarter: number; clock: number }
 
 export interface Play {
   seq: number;
@@ -146,6 +159,8 @@ export interface Play {
   points?: { side: Side; pts: number; kind: ScoreKind };
   /** True when the offense went for it on fourth down. */
   fourthDownTry?: boolean;
+  /** A player injured on this play. */
+  injury?: InjuryInfo;
   scoreAfter: [number, number];
 }
 
@@ -300,6 +315,8 @@ export interface GameResult {
   highlights: Highlight[];
   recap: Recap;
   percentageChecks: PercentageCheck[];
+  /** Injuries that happened in this game (absent on results stored before injuries existed). */
+  injuries?: Injury[];
   warnings: string[];
   validation: ValidationCheck[];
   config: SimConfig;

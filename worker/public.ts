@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { passerRating } from '../engine/stats';
 import { HttpError, type AppEnv } from './auth';
 import { PLAYER_STAT_COLS, TEAM_STAT_COLS, all, first, j, now, type DB } from './db';
-import { getSeason, logoUrl, publicGames, ranks, records, recordText, teamsForSeason, type GameRow, type SeasonRow, type TeamRow } from './league';
+import { getSeason, injuredOut, nextGame, logoUrl, publicGames, ranks, records, recordText, teamsForSeason, type GameRow, type SeasonRow, type TeamRow } from './league';
 
 export const publicRoutes = new Hono<AppEnv>();
 
@@ -134,6 +134,8 @@ publicRoutes.get('/games/:id', async (c) => {
       highlights: highlights.map((h) => ({ ...h, tags: j(h.tags as string, []) })),
       playerStats: playerStats.map((p) => ({ ...derive(p), lockedFields: j(p.locked_fields, []), locked_fields: undefined })),
       recap: j(run?.recap, null), publishedAt: run?.published_at ?? null, version: run?.version ?? 1,
+      injuries: await all(db, `SELECT i.play_seq AS playSeq, i.quarter, i.clock, i.team_id AS teamId, i.player_id AS playerId, p.name, i.kind, i.games_out AS gamesOut
+        FROM injuries i JOIN players p ON p.id = i.player_id WHERE i.game_id = ?1 ORDER BY i.play_seq`, g.id),
     },
   });
 });
@@ -221,10 +223,12 @@ publicRoutes.get('/teams/:id', async (c) => {
     history.push({ seasonId: s.id, year: s.year, name: s.name, conference: s.conference, record: recordText(x), confRecord: `${x?.cw ?? 0}-${x?.cl ?? 0}`, pf: x?.pf ?? 0, pa: x?.pa ?? 0, lastRank: fin?.rank ?? null });
   }
   const r = rec.get(t.id);
+  const ng = await nextGame(db, season.id, t.id);
+  const injured = new Map((ng ? await injuredOut(db, t.id, ng) : []).map((o) => [o.playerId, { remaining: o.remaining, gamesOut: o.gamesOut }]));
   return c.json({
     season: { id: season.id, year: season.year, name: season.name },
     team: { id: t.id, name: t.name, short: t.short_name, abbr: t.abbr, mascot: t.mascot, color: t.primary_color, color2: t.secondary_color, logo: logoUrl(t), stadium: t.stadium, conference: t.conference_name, conferenceId: t.conference_id, offScheme: t.off_scheme, defScheme: t.def_scheme, rank: rk.map.get(t.id) ?? null, record: recordText(r), confRecord: `${r?.cw ?? 0}-${r?.cl ?? 0}`, pf: r?.pf ?? 0, pa: r?.pa ?? 0, streak: r?.streak ?? '' },
-    roster: rosterRows.map((p) => ({ ...p, secondary: j(p.secondary as string, []), active: !!p.active })),
+    roster: rosterRows.map((p) => ({ ...p, secondary: j(p.secondary as string, []), active: !!p.active, injury: injured.get(p.playerId as string) ?? null })),
     schedule: await publicGames(db, games, teams, rec, rk.map, at),
     players: agg.map(derive),
     teamStats: totals?.gp ? totals : null, opponentStats: opp?.gp ? opp : null,

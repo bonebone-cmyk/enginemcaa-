@@ -16,6 +16,7 @@ export { fmtClock, periodLabel, downLabel, playResult, spot } from './describe';
 export { reconstructPrimetime, checkPrimetimeInput } from './primetime';
 export { rebuildDrives } from './drives';
 export { describePlay } from './describe';
+export { injuryLabel, injuryShort } from './injuries';
 export { OFF_PROFILE, DEF_PROFILE } from './schemes';
 
 export interface SimInput {
@@ -42,6 +43,7 @@ export function finalize(mode: 'sim' | 'primetime', seed: string, teams: [TeamIn
     final: calc.final, quarters: calc.quarters, overtimePeriods: Math.max(0, calc.quarters[0].length - 4),
     plays, drives, scoring: calc.scoring, playerStats: calc.playerStats, teamStats: calc.teamStats, highlights,
     percentageChecks, warnings, config, primetime,
+    injuries: plays.filter((p) => p.injury).map((p) => ({ ...p.injury!, playSeq: p.seq, quarter: p.quarter, clock: p.clock })),
   };
   const recap = writeRecap(partial, teams);
   const validation = validateGame(partial, teams);
@@ -61,6 +63,7 @@ export function simulateGame(input: SimInput): GameResult {
   const lineups = [buildLineup(teams[0], config.allowInactive), buildLineup(teams[1], config.allowInactive)] as [ReturnType<typeof buildLineup>, ReturnType<typeof buildLineup>];
   const pct = runPercentageChecks(input.seed, teams, lineups, config);
   const sim = new GameSim(teams, pct.state, config, new Rng(`${input.seed}/game`));
+  sim.injuries = !!config.injuries;
   sim.run();
   return finalize('sim', input.seed, teams, config, sim.plays, sim.drives, pct.checks, warnings);
 }

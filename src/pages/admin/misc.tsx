@@ -164,6 +164,8 @@ export function RankingsManager() {
   );
 }
 
+const chaosName = (v: number) => (v <= 15 ? 'Calm' : v <= 35 ? 'Normal' : v <= 65 ? 'Wild' : v <= 85 ? 'Chaotic' : 'Total chaos');
+
 // ================================================================== SIMULATION SETTINGS
 export function SimSettings() {
   const { seasonId } = useSeason();
@@ -179,7 +181,17 @@ export function SimSettings() {
   return (
     <div className="space-y-4">
       <h1 className="font-display text-3xl font-bold uppercase">Simulation Settings</h1>
-      <p className="max-w-3xl text-sm text-ink-300">These settings apply to future simulations in this season. Results that already exist keep the settings they were created with; stored simulations are never altered. Team ratings, schemes and run/pass ratios are set per team in Team Manager.</p>
+      <p className="max-w-3xl text-sm text-ink-300">These settings apply to future simulations in this season. Results that already exist keep the settings they were created with; stored simulations are never altered. Schemes and run/pass ratios are set per team in Team Manager.</p>
+      <Card title="Chaos meter">
+        <div className="flex flex-wrap items-center gap-4">
+          <input type="range" min={0} max={100} step={5} value={Number(c.chaos ?? 25)} onChange={(e) => setC({ ...c, chaos: Number(e.target.value) })} className="w-full max-w-md accent-[#f5b301]" aria-label="Chaos" />
+          <span className="font-display text-3xl font-bold tnum">{Number(c.chaos ?? 25)}</span>
+          <Badge tone={Number(c.chaos ?? 25) <= 15 ? 'blue' : Number(c.chaos ?? 25) <= 35 ? 'green' : Number(c.chaos ?? 25) <= 65 ? 'gold' : 'red'}>{chaosName(Number(c.chaos ?? 25))}</Badge>
+        </div>
+        <p className="mt-2 text-sm text-ink-300">25 is normal college football. Turning it up makes each team's good days and bad days more extreme (more upsets), and adds more long plays, turnovers, return touchdowns and higher scores. It also makes injuries more frequent and more serious. Turning it down makes games steadier and lower-scoring.</p>
+        <div className="mt-3"><Check label="Injuries in simulated games" checked={c.injuries !== false} onChange={(v) => setC({ ...c, injuries: v })} /></div>
+        <p className="mt-1 text-xs text-ink-400">A player can be hurt on a play they're involved in, and is out for the rest of the quarter, the rest of the game, or 1 to 7 more games. Most injuries are short; long ones are rare. Injured players sit out the team's next games automatically, so the backup takes over. Imported CFB 27 results never get injuries. Changes apply to games simulated from now on; finished games keep the injuries they had.</p>
+      </Card>
       <Card title="Engine">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {num('homeFieldAdvantage', 'Home-field advantage', `Rating points for the home team (default ${DEFAULT_CONFIG.homeFieldAdvantage}). Ignored at neutral sites.`)}
@@ -194,7 +206,7 @@ export function SimSettings() {
       <ErrorBox error={act.error} />
       <div className="flex items-center gap-3"><Button variant="primary" busy={act.busy} onClick={() => act.run(async () => {
         setSaved('');
-        await api.put('/admin/settings', { seasonId, config: { homeFieldAdvantage: Number(c.homeFieldAdvantage), sackConvention: c.sackConvention, activityEffect: Number(c.activityEffect), upsetGapClosure: Number(c.upsetGapClosure), starBoost: Number(c.starBoost), allowInactive: !!c.allowInactive } });
+        await api.put('/admin/settings', { seasonId, config: { homeFieldAdvantage: Number(c.homeFieldAdvantage), sackConvention: c.sackConvention, activityEffect: Number(c.activityEffect), upsetGapClosure: Number(c.upsetGapClosure), starBoost: Number(c.starBoost), chaos: Number(c.chaos ?? 25), injuries: c.injuries !== false, allowInactive: !!c.allowInactive } });
         setSaved('Settings saved.'); q.reload();
       })}>Save settings</Button>{saved && <span className="text-sm text-emerald-300">{saved}</span>}</div>
       <Card title="AI features">

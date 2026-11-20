@@ -1,3 +1,4 @@
+import { injuryLabel } from './injuries';
 import type { Play, Side } from './types';
 
 export const fmtClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -38,6 +39,11 @@ export function playResult(p: Play): string {
 }
 
 export function describePlay(p: Play, name: (id?: string) => string, abbr: [string, string], teamName: [string, string]): string {
+  const base = describeAction(p, name, abbr, teamName);
+  return p.injury ? `${base} ${name(p.injury.playerId)} was injured on the play and is ${injuryLabel(p.injury)}.` : base;
+}
+
+function describeAction(p: Play, name: (id?: string) => string, abbr: [string, string], teamName: [string, string]): string {
   const off = p.offense;
   const def: Side = off === 0 ? 1 : 0;
   const after = () => spot(p.ballOn + p.yards, off, abbr);

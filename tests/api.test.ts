@@ -464,6 +464,47 @@ describe('primetime imports', () => {
   });
 });
 
+describe('chaos and injuries', () => {
+  it('saves the chaos meter and injury switch', async () => {
+    const cur = (await admin.get(`/admin/settings?season=${L.season}`)).json.config;
+    expect(cur).toMatchObject({ chaos: 25, injuries: true });
+    expect((await admin.put('/admin/settings', { seasonId: L.season, config: { ...cur, chaos: 140 } })).status).toBe(400);
+    expect((await admin.put('/admin/settings', { seasonId: L.season, config: { ...cur, chaos: 70 } })).status).toBe(200);
+    expect((await admin.get(`/admin/settings?season=${L.season}`)).json.config.chaos).toBe(70);
+    await admin.put('/admin/settings', { seasonId: L.season, config: cur });
+  });
+  it('keeps a player with a multi-game injury out of the team\'s next games, then brings him back', async () => {
+    const qb = L.players.AAA.QB1;
+    const played = (await admin.get(`/admin/games?season=${L.season}`)).json.games.filter((g: any) => g.status === 'final' && (g.away_team_id === L.teams.AAA || g.home_team_id === L.teams.AAA)).sort((a: any, b: any) => b.week - a.week)[0];
+    await env.DB.prepare("INSERT INTO injuries (game_id, run_id, season_id, team_id, player_id, week, play_seq, quarter, clock, kind, games_out) VALUES (?1, 'test', ?2, ?3, ?4, ?5, 9999, 2, 300, 'games', 2)")
+      .bind(played.id, L.season, L.teams.AAA, qb, played.week).run();
+    const w = played.week;
+    const g1 = await addGame(admin, L.season, w + 1, L.teams.AAA, L.teams.CCC, { allowDuplicate: true });
+    const g2 = await addGame(admin, L.season, w + 2, L.teams.BBB, L.teams.AAA, { allowDuplicate: true });
+    const g3 = await addGame(admin, L.season, w + 3, L.teams.AAA, L.teams.DDD, { allowDuplicate: true });
+    const roster = (await admin.get(`/admin/roster?season=${L.season}&team=${L.teams.AAA}`)).json.players;
+    expect(roster.find((p: any) => p.player_id === qb).injury).toMatchObject({ remaining: 2, gamesOut: 2 });
+    expect((await pub.get(`/teams/${L.teams.AAA}`)).json.roster.find((p: any) => p.playerId === qb).injury).toMatchObject({ remaining: 2 });
+    // Game 1 of 2: the QB sits and the backup plays.
+    const pre = (await admin.get(`/admin/games/${g1}/preflight`)).json.teams.find((t: any) => t.teamId === L.teams.AAA);
+    expect(pre.warnings.join(' ')).toMatch(/out injured: game 1 of 2/);
+    const s1 = await admin.post(`/admin/games/${g1}/simulate`, { seed: 'inj-1', snapshotId: L.snapshotId });
+    expect(s1.status).toBe(201);
+    const r1 = (await admin.get(`/admin/runs/${s1.json.runId}`)).json.result;
+    expect(r1.playerStats.some((l: any) => l.playerId === qb)).toBe(false);
+    expect(r1.playerStats.find((l: any) => l.playerId === L.players.AAA.QB2).passAtt).toBeGreaterThan(5);
+    expect(r1.warnings.join(' ')).toMatch(/out injured/);
+    // Game 2 of 2 is still missed; the game after that he is back.
+    expect((await admin.get(`/admin/games/${g2}/preflight`)).json.teams.find((t: any) => t.teamId === L.teams.AAA).warnings.join(' ')).toMatch(/game 2 of 2/);
+    expect((await admin.get(`/admin/games/${g3}/preflight`)).json.teams.find((t: any) => t.teamId === L.teams.AAA).warnings.join(' ')).not.toMatch(/out injured/);
+    // A real CFB 27 game is never affected by simulated injuries.
+    const pt = await admin.post(`/admin/games/${g2}/primetime`, { input: { final: [24, 17], locks: { players: { [qb]: { passYds: 200 } } } }, seed: 'inj-pt' });
+    expect(pt.status).toBe(201);
+    await env.DB.prepare("DELETE FROM injuries WHERE run_id = 'test'").run();
+    for (const r of [s1.json.runId, pt.json.runId]) await admin.post(`/admin/runs/${r}/reject`, { note: 'test' });
+  });
+});
+
 describe('rankings', () => {
   it('stores manual AP rankings; computed recommendations never overwrite them', async () => {
     const order = [L.teams.DDD, L.teams.AAA, L.teams.CCC];

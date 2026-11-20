@@ -368,7 +368,7 @@ export function RosterManager() {
           <tbody>{d.players.map((p: Row) => (
             <tr key={p.id} className={cx('border-b border-ink-800 last:border-0', !p.active && 'opacity-55')}>
               <td className={cx(td, 'tnum text-ink-400')}>{p.jersey ?? ''}</td><td className={cx(td, 'font-medium')}>{p.name}</td><td className={td}><Badge>{p.position}</Badge></td><td className={cx(td, 'text-ink-300')}>{p.secondary_positions.join(', ')}</td>
-              <td className={tdr}>{p.depth_rank}</td><td className={td}>{p.active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}</td>
+              <td className={tdr}>{p.depth_rank}</td><td className={td}>{p.active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}{p.injury && <Badge tone="red" className="ml-1">Injured · out next {p.injury.remaining} game{p.injury.remaining === 1 ? '' : 's'}</Badge>}</td>
               <td className={cx(td, 'text-right')}><span className="inline-flex gap-1.5"><Button size="sm" onClick={() => setEdit(p)}>Edit</Button><Button size="sm" variant="ghost" onClick={() => act.run(async () => { await api.patch(`/admin/roster/${p.id}`, { active: !p.active }); q.reload(); })}>{p.active ? 'Deactivate' : 'Activate'}</Button><Button size="sm" variant="ghost" onClick={() => confirm(`Remove ${p.name} from the roster?`) && act.run(async () => { await api.del(`/admin/roster/${p.id}`); q.reload(); })}>Remove</Button></span></td>
             </tr>))}</tbody></table></div></Card>)}</Load>}
       {edit && <PlayerForm player={edit === 'new' ? null : edit} teamId={teamId} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); q.reload(); }} />}

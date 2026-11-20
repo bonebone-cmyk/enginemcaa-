@@ -235,6 +235,21 @@ export function validateGame(r: Pick<GameResult, 'plays' | 'final' | 'quarters' 
     add('Stored statistics are exactly the statistics derived from the play ledger', e);
   }
   {
+    // An injured player takes no further part until the injury allows it (next period for a quarter-long injury).
+    const e: string[] = [];
+    const out = new Map<string, number>();
+    for (const p of r.plays) {
+      for (const [id, back] of [...out]) if (p.quarter >= back) out.delete(id);
+      const ids = [p.passer, p.rusher, p.target, p.kicker, p.punter, p.returner, p.interceptor, p.pd, p.fumbler, p.forcedBy, p.recoveredBy, p.blockedBy, p.sackAllowedBy, p.penalty?.player, ...(p.tacklers ?? []), ...(p.sackers ?? [])];
+      for (const id of ids) if (id && out.has(id)) e.push(`play ${p.seq}: ${name(id)} appears while injured`);
+      if (p.injury) {
+        if (!lineups[p.injury.side].all.has(p.injury.playerId)) e.push(`play ${p.seq}: injured player is not on the roster`);
+        out.set(p.injury.playerId, p.injury.kind === 'quarter' ? p.quarter + 1 : Infinity);
+      }
+    }
+    add('Injured players do not play while injured', [...new Set(e)]);
+  }
+  {
     const seqs = new Set(r.plays.map((p) => p.seq));
     add('Every highlight references a stored play', r.highlights.filter((h) => !seqs.has(h.playSeq)).map((h) => `highlight references missing play ${h.playSeq}`));
   }

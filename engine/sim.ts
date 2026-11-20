@@ -1,6 +1,7 @@
 // Play-by-play college football simulation. Scores are never rolled directly: every point comes from a
 // sequence of legal snaps, and every individual credit goes to a player who is on the active roster.
 import { describePlay } from './describe';
+import { chaosMul, severityWeights } from './injuries';
 import type { PctState } from './percentages';
 import { buildLineup, defWeight, type Lineup, type Slot } from './roster';
 import { Rng, clamp } from './rng';
@@ -73,7 +74,23 @@ export class GameSim {
   abbr: [string, string];
   teamName: [string, string];
 
+  /** Turned on by simulateGame only; reconstructions of real games never get injuries. */
+  injuries = false;
+  private injRng: Rng;
+  /** Players currently out, per side: playerId -> first period they may return (Infinity = not this game). */
+  private out: [Map<string, number>, Map<string, number>] = [new Map(), new Map()];
+  /** Chaos multipliers; all equal 1 at the default chaos of 25. */
+  private bigMul: number;
+  private turnMul: number;
+  private returnMul: number;
+  private formSd: number;
+
   constructor(public teams: [TeamInput, TeamInput], pct: [PctState, PctState], public cfg: SimConfig, public rng: Rng) {
+    this.injRng = rng.fork('injuries');
+    this.bigMul = chaosMul(cfg.chaos, 1.6);
+    this.turnMul = chaosMul(cfg.chaos, 1.2);
+    this.returnMul = chaosMul(cfg.chaos, 2);
+    this.formSd = 2.6 * chaosMul(cfg.chaos, 2.4);
     const l0 = buildLineup(teams[0], cfg.allowInactive);
     const l1 = buildLineup(teams[1], cfg.allowInactive);
     this.sides = [
@@ -173,9 +190,44 @@ export class GameSim {
       ...p,
       scoreAfter: [this.score[0], this.score[1]],
     };
+    if (this.injuries && (play.type === 'run' || play.type === 'pass' || play.type === 'sack')) this.rollInjury(play);
     play.desc = describePlay(play, this.name, this.abbr, this.teamName);
     this.plays.push(play);
     return play;
+  }
+
+  // ------------------------------------------------------------------ injuries
+  private lineupWithout(side: Side, out: Map<string, number>) {
+    const t = this.sides[side].team;
+    return buildLineup({ ...t, roster: t.roster.filter((p) => !out.has(p.id)) }, this.cfg.allowInactive);
+  }
+  /** At most one injury per play, to a player who was involved in it. Rare, and usually short. */
+  private rollInjury(play: Play) {
+    const off = play.offense;
+    const def = other(off);
+    const involved: [string | undefined, Side][] = [[play.rusher, off], [play.target, off], [play.type === 'sack' ? play.passer : undefined, off], ...(play.tacklers ?? []).map((t) => [t, def] as [string, Side]), ...(play.sackers ?? []).map((t) => [t, def] as [string, Side])];
+    const p = 0.0011 * chaosMul(this.cfg.chaos, 2.4);
+    for (const [id, side] of involved) {
+      if (!id || this.out[side].has(id) || !this.injRng.chance(p)) continue;
+      const sev = this.injRng.weighted(severityWeights(this.cfg.chaos), (x) => x.w);
+      const next = new Map(this.out[side]).set(id, sev.kind === 'quarter' ? this.quarter + 1 : Infinity);
+      const l = this.lineupWithout(side, next);
+      // Never leave a team unable to play: without a QB or a receiver the player stays in (no one is invented).
+      if (!l.qbs.length || !l.receivers.some((r) => r.p.id !== l.qbs[0].p.id)) continue;
+      this.out[side] = next;
+      this.sides[side].lineup = l;
+      play.injury = { playerId: id, side, kind: sev.kind, gamesOut: sev.gamesOut };
+      return;
+    }
+  }
+  /** Players hurt for "the rest of the quarter" return when a new period starts. */
+  private startPeriod() {
+    for (const side of [0, 1] as Side[]) {
+      const back = [...this.out[side]].filter(([, q]) => q <= this.quarter).map(([id]) => id);
+      if (!back.length) continue;
+      for (const id of back) this.out[side].delete(id);
+      this.sides[side].lineup = this.lineupWithout(side, this.out[side]);
+    }
   }
 
   beginDrive(side: Side, ballOn: number) {
@@ -214,7 +266,7 @@ export class GameSim {
   // ------------------------------------------------------------------ full game
   run() {
     const r: Side = this.rng.chance(0.5) ? 0 : 1;
-    this.form = [this.rng.normal(0, 2.6), this.rng.normal(0, 2.6)];
+    this.form = [this.rng.normal(0, this.formSd), this.rng.normal(0, this.formSd)];
     this.firstHalfReceiver = r;
     this.next = { kind: 'kickoff', kicking: other(r), free: false };
     for (let guard = 0; guard < 5000; guard++) {
@@ -224,12 +276,14 @@ export class GameSim {
         if (this.quarter === 1 || this.quarter === 3) {
           this.quarter++;
           this.clock = this.cfg.quarterSeconds;
+          this.startPeriod();
           continue;
         }
         if (this.quarter === 2) {
           this.endDrive('END_HALF');
           this.quarter = 3;
           this.clock = this.cfg.quarterSeconds;
+          this.startPeriod();
           for (const s of this.sides) (s.timeouts = 3), (s.defSnaps = 0);
           this.next = { kind: 'kickoff', kicking: this.firstHalfReceiver, free: false };
           continue;
@@ -259,6 +313,7 @@ export class GameSim {
       this.ot = period;
       this.quarter = 4 + period;
       this.clock = 0;
+      if (this.injuries) this.startPeriod();
       for (const s of this.sides) s.timeouts = 1;
       const order: Side[] = [first, other(first)];
       for (let i = 0; i < 2; i++) {
@@ -453,7 +508,7 @@ export class GameSim {
     const forcedBy = this.rng.chance(0.75) ? this.defender(def, 'runTackle') : undefined;
     const recoveredBy = this.defender(def, 'runTackle');
     const defSpot = 100 - spotOff;
-    const scoop = !this.force.plain && this.rng.chance(0.05);
+    const scoop = !this.force.plain && this.rng.chance(0.05 * this.returnMul);
     const ret = scoop ? 100 - defSpot : this.rng.chance(0.3) ? Math.min(this.rng.int(1, 12), 99 - defSpot) : 0;
     const base = { ...p, yards, down: this.down, distance: this.dist, fourthDownTry: this.down === 4 || undefined, fumbler: fumbler.id, fumbleLost: true, forcedBy, recoveredBy, turnover: 'fumble' as const, returnYards: ret, tacklers: undefined };
     if (this.cur) this.cur.yards += yards;
@@ -487,10 +542,10 @@ export class GameSim {
     if (toGoal <= 10) mean *= 0.8;
     if (this.down >= 3) mean -= 0.35;
     let y = this.rng.normal(mean, 3.1);
-    if (this.rng.chance(clamp(0.075 + 0.02 * e + dprof.bigPlay + (star ? 0.045 : 0), 0.02, 0.22))) y += 7 + this.rng.exp(11);
+    if (this.rng.chance(clamp(0.075 + 0.02 * e + dprof.bigPlay + (star ? 0.045 : 0), 0.02, 0.22) * this.bigMul)) y += 7 + this.rng.exp(11);
     const yards = clamp(Math.round(y), Math.max(-7, -this.ballOn), toGoal);
     const p = { type: 'run' as const, offense: off, rusher: rusher.id, tacklers: this.tacklers(def, 'runTackle') };
-    const pFum = 0.021 * prof.fumble * (1 - 0.15 * this.sharp(off)) * (star ? 0.7 : 1);
+    const pFum = 0.021 * prof.fumble * (1 - 0.15 * this.sharp(off)) * (star ? 0.7 : 1) * this.turnMul;
     if (this.rng.chance(pFum)) {
       if (this.rng.chance(this.surging(def) ? 0.6 : 0.48)) {
         if (this.fumbleLost(p, yards, rusher)) return;
@@ -563,7 +618,7 @@ export class GameSim {
     const comp = clamp(compBase + 0.045 * e + prof.comp - dprof.comp + (qr - 70) * 0.003 + (tr - 70) * 0.0015 + 0.01 * this.sharp(off) - (this.down >= 3 ? 0.04 : 0), 0.15, 0.92);
     let pInt = 0.025 - 0.007 * e + dprof.int + (depth === 'deep' ? 0.02 : depth === 'short' ? -0.008 : 0) - (qr - 70) * 0.0004;
     if (this.surging(def)) pInt *= 1.25;
-    pInt = clamp(pInt, 0.005, 0.09);
+    pInt = clamp(pInt, 0.005, 0.09) * this.turnMul;
     const air = depth === 'short' ? clamp(Math.round(this.rng.normal(4.5, 2.5)), -3, 9) : depth === 'medium' ? clamp(Math.round(this.rng.normal(13, 3)), 8, 19) : clamp(Math.round(this.rng.normal(29, 8)), 20, 55);
     const p = { type: 'pass' as const, offense: off, passer: qb.id, target: target.id, depth };
     const roll = this.rng.next();
@@ -580,7 +635,7 @@ export class GameSim {
         return;
       }
       const defSpot = 100 - spotOff;
-      const six = !this.force.plain && this.rng.chance(0.045);
+      const six = !this.force.plain && this.rng.chance(0.045 * this.returnMul);
       const ret = six ? 100 - defSpot : this.rng.chance(0.3) ? 0 : Math.min(Math.round(this.rng.exp(9)), 99 - defSpot);
       if (six) {
         this.emit({ ...base, returnYards: ret, td: def, points: { side: def, pts: 6, kind: 'TD' } });
@@ -603,7 +658,7 @@ export class GameSim {
     }
     let yac = depth === 'short' ? this.rng.exp(2.9) : depth === 'medium' ? this.rng.exp(2.1) : this.rng.exp(2.6);
     yac += (tr - 70) * 0.04 + 0.5 * e;
-    if (this.rng.chance(clamp(0.04 + 0.012 * e + dprof.bigPlay + (star ? 0.04 : 0), 0.01, 0.18))) yac += 6 + this.rng.exp(14);
+    if (this.rng.chance(clamp(0.04 + 0.012 * e + dprof.bigPlay + (star ? 0.04 : 0), 0.01, 0.18) * this.bigMul)) yac += 6 + this.rng.exp(14);
     const yards = clamp(Math.round(air + Math.max(0, yac)), Math.max(-5, -this.ballOn), toGoal);
     const full = { ...p, complete: true, tacklers: this.tacklers(def, 'passTackle') };
     if (this.rng.chance(0.006) && this.rng.chance(0.5) && this.fumbleLost(full, yards, target)) return;
@@ -700,7 +755,7 @@ export class GameSim {
       this.next = { kind: 'ball', side: def, ballOn: catchSpot };
       return;
     }
-    const house = !this.force.plain && this.rng.chance(0.012 + (R.team.stRating - 70) * 0.0003);
+    const house = !this.force.plain && this.rng.chance((0.012 + (R.team.stRating - 70) * 0.0003) * this.returnMul);
     const ret = house ? 100 - catchSpot : clamp(Math.round(this.rng.exp(8.5) - 1), -3, 99 - catchSpot);
     if (house) {
       this.emit({ ...base, kickYards: gross, returner: returner.id, returnYards: ret, td: def, points: { side: def, pts: 6, kind: 'TD' } });
@@ -741,7 +796,7 @@ export class GameSim {
       this.next = { kind: 'ball', side: rec, ballOn: Math.max(landing, 1) };
       return;
     }
-    const house = !this.force.plain && this.rng.chance(0.006 + (R.team.stRating - 70) * 0.0002);
+    const house = !this.force.plain && this.rng.chance((0.006 + (R.team.stRating - 70) * 0.0002) * this.returnMul);
     const ret = house ? 100 - landing : clamp(Math.round(this.rng.normal(free ? 12 : 21.5, 7)), 3, 99 - landing);
     if (house) {
       this.emit({ ...base, kickYards, returner: returner.id, returnYards: ret, td: rec, points: { side: rec, pts: 6, kind: 'TD' } });

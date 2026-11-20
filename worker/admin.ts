@@ -7,7 +7,7 @@ import { DEF_SCHEMES, LOCKABLE_PLAYER_STATS, OFF_SCHEMES, POSITIONS, SimError, T
 import { aiRecap, extractScreenshots } from './ai';
 import { HttpError, auditStmt, type AdminUser, type AppEnv } from './auth';
 import { all, assertStmt, clearAssert, first, j, now, stmt, uid, type DB } from './db';
-import { getSeason, ranks, records, roster, simConfig, teamInput, teamsForSeason, toRosterPlayers, type GameRow, type SeasonRow } from './league';
+import { getSeason, injuredOut, nextGame, ranks, records, roster, simConfig, teamInput, teamsForSeason, toRosterPlayers, type GameRow, type SeasonRow } from './league';
 import { currentPercentages, parseCsv, parsePercentages, resolveSnapshot, snapshotCurrent, snapshotEntries, upsertPercentagesStmt, type Snapshot } from './percent';
 import { publishRun, unpublishGame } from './publish';
 
@@ -175,7 +175,9 @@ adminRoutes.get('/roster', async (c) => {
   const teamId = c.req.query('team') ?? '';
   const rows = await roster(c.env.DB, season.id, teamId);
   const t = await teamInput(c.env.DB, season.id, teamId, { activity: 0, upset: 0, star: 0 }).catch(() => null);
-  return c.json({ season: season.id, players: rows.map((r) => ({ ...r, secondary_positions: j(r.secondary_positions, []), awards: j(r.awards, []), active: !!r.active })), check: t ? checkRoster(t) : null });
+  const ng = teamId ? await nextGame(c.env.DB, season.id, teamId) : null;
+  const injured = new Map((ng ? await injuredOut(c.env.DB, teamId, ng) : []).map((o) => [o.playerId, o]));
+  return c.json({ season: season.id, players: rows.map((r) => ({ ...r, secondary_positions: j(r.secondary_positions, []), awards: j(r.awards, []), active: !!r.active, injury: injured.get(r.player_id) ?? null })), check: t ? checkRoster(t) : null });
 });
 adminRoutes.post('/roster', async (c) => {
   const b = await body(c, rosterSchema.extend({ seasonId: z.string(), teamId: z.string(), playerId: z.string().optional() }));
@@ -538,7 +540,22 @@ adminRoutes.post('/percentages/snapshot', async (c) => {
 });
 
 // ---------------------------------------------------------------------------------- simulation
-interface Prepared { game: GameRow; season: SeasonRow; teams: [TeamInput, TeamInput]; config: SimConfig; snapshot: Snapshot | null }
+interface Prepared { game: GameRow; season: SeasonRow; teams: [TeamInput, TeamInput]; config: SimConfig; snapshot: Snapshot | null; injuryNotes: string[] }
+
+/** Mark players still out from earlier injuries as unavailable. Returns readable notes; throws if a team can no longer field a lineup. */
+async function sitInjured(db: DB, game: GameRow, teams: TeamInput[]): Promise<string[]> {
+  const notes: string[] = [];
+  for (const t of teams) {
+    const out = await injuredOut(db, t.id, game);
+    if (!out.length) continue;
+    const ids = new Set(out.map((o) => o.playerId));
+    t.roster = t.roster.map((p) => (ids.has(p.id) ? { ...p, active: false } : p));
+    for (const o of out) notes.push(`${o.name} (${t.abbr}) is out injured: game ${o.gamesOut - o.remaining + 1} of ${o.gamesOut}.`);
+    const ck = checkRoster(t);
+    if (ck.errors.length) throw new HttpError(422, `${ck.errors[0]} Injured and unavailable: ${out.map((o) => o.name).join(', ')}.`, { code: 'ROSTER', details: [...ck.errors, ...notes] });
+  }
+  return notes;
+}
 
 async function prepare(c: C, gameId: string, opts: { needPct: boolean; snapshotId?: string | null }): Promise<Prepared> {
   const db = c.env.DB;
@@ -560,7 +577,9 @@ async function prepare(c: C, gameId: string, opts: { needPct: boolean; snapshotI
   };
   const teams: [TeamInput, TeamInput] = [await mk(game.away_team_id), await mk(game.home_team_id)];
   const config = { ...(await simConfig(db, season.id)), neutralSite: !!game.neutral_site };
-  return { game, season, teams, config, snapshot };
+  // Simulated games leave injured players out. Imported CFB 27 results are real games and are never changed by this.
+  const injuryNotes = opts.needPct ? await sitInjured(db, game, teams) : [];
+  return { game, season, teams, config, snapshot, injuryNotes };
 }
 
 async function storeRun(c: C, p: Prepared, mode: 'sim' | 'primetime', result: GameResult, regenerate: boolean): Promise<string> {
@@ -594,7 +613,10 @@ adminRoutes.get('/games/:id/preflight', async (c) => {
   const out = [];
   for (const id of [game.away_team_id, game.home_team_id]) {
     const t = await teamInput(db, game.season_id, id, { activity: 0, upset: 0, star: 0 }).catch((e: Error) => e);
-    out.push(t instanceof Error ? { teamId: id, errors: [t.message], warnings: [] } : { teamId: id, name: t.name, ...checkRoster(t) });
+    if (t instanceof Error) { out.push({ teamId: id, errors: [t.message], warnings: [] }); continue; }
+    const notes = await sitInjured(db, game, [t]).catch((e: HttpError) => ({ error: e }));
+    if ('error' in notes) out.push({ teamId: id, name: t.name, errors: [notes.error.message], warnings: [] });
+    else { const ck = checkRoster(t); out.push({ teamId: id, name: t.name, errors: ck.errors, warnings: [...notes, ...ck.warnings] }); }
   }
   return c.json({ teams: out });
 });
@@ -609,6 +631,7 @@ adminRoutes.post('/games/:id/simulate', async (c) => {
   } catch (e) {
     return simErr(e);
   }
+  result.warnings.unshift(...p.injuryNotes);
   if (b.aiRecap && allValid(result)) {
     const ai = c.env.ANTHROPIC_API_KEY ? await aiRecap(c.env, result, p.teams) : { error: 'AI recaps are not configured (no ANTHROPIC_API_KEY); the standard recap was used.' };
     if ('error' in ai) result.warnings.push(ai.error);
@@ -791,6 +814,7 @@ adminRoutes.get('/rankings/recommendation', async (c) => {
 // ---------------------------------------------------------------------------------- settings, audit, summary
 const configSchema = z.object({
   homeFieldAdvantage: z.number().min(0).max(10), sackConvention: z.enum(['ncaa', 'nfl']), activityEffect: z.number().min(0).max(6), upsetGapClosure: z.number().min(0).max(1), starBoost: z.number().min(0).max(25), allowInactive: z.boolean(),
+  chaos: z.number().int().min(0).max(100), injuries: z.boolean(),
 });
 adminRoutes.get('/settings', async (c) => {
   const season = await getSeason(c.env.DB, c.req.query('season'));

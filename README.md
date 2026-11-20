@@ -132,6 +132,19 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 - There are no team or player overall ratings. Every team plays from the same baseline; results come from the
   Activity / Upset / Star percentages, offensive and defensive schemes, home field, depth charts and chance.
 
+## Chaos meter and injuries
+
+- **Chaos meter** (Simulation Settings, 0–100, default 25 = normal college football). Higher values make each team's
+  good and bad days more extreme (more upsets) and add long plays, turnovers, return touchdowns and higher scores.
+  Lower values make games steadier. Measured with a 14-point favorite: underdog wins 9% at 25, 20% at 100; average
+  combined score 55 at 25, 73 at 100.
+- **Injuries** (on by default, can be switched off). Only players involved in a play can be hurt, at most one per
+  play. They are out for the rest of the quarter, the rest of the game, or 1–7 more games. At chaos 25 there is about
+  one injury every four games, roughly three-quarters of them short; 4+ game injuries come up about once every 50
+  games. Chaos raises both how often injuries happen and how serious they are. Multi-game injuries carry over: the
+  player automatically sits out the team's next games and the depth chart moves up. A team's last QB or last receiver
+  is never taken out. Imported CFB 27 games never get injuries.
+
 ## Quick imports
 
 - **Season calendar** (Schedule Manager): pick the week 1 Saturday. Every week after is the next Saturday, and the
