@@ -12,27 +12,37 @@ type Row = Record<string, any>;
 type Format = 'text' | 'sheet';
 
 const cell = (v: unknown, dp?: number) => (typeof v === 'number' && dp ? v.toFixed(dp) : String(v ?? 0));
+const n1 = (v: unknown) => (typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : String(v ?? 0));
 
-/** One section of a team's box score as rows of strings: [header, ...players, Team?]. Nothing is recomputed: values come from the stored result. */
-function sectionRows(b: (typeof BOX)[number], players: Row[], team: Row | undefined): string[][] | null {
+/** Text format: every stat in the section, labeled, in box-score order. Values the team line does not have ("—") are left out. */
+const TEXT: Record<string, (r: Row) => [unknown, string][]> = {
+  Passing: (r) => [[`${r.passCmp}/${r.passAtt}`, ''], [r.passYds, 'yds'], [`${n1(r.cmpPct)}%`, ''], [r.passTd, 'TD'], [r.passInt, 'INT'], [r.sacked, 'sacked'], [n1(r.passRating), 'rating']],
+  Rushing: (r) => [[r.rushAtt, 'car'], [r.rushYds, 'yds'], [n1(r.ypc), 'avg'], [r.rushTd, 'TD'], [r.rushLong, 'long'], [r.fumbles, 'fum']],
+  Receiving: (r) => [[r.rec, 'rec'], [r.targets, 'tgt'], [r.recYds, 'yds'], [n1(r.ypr), 'avg'], [r.recTd, 'TD'], [r.recLong, 'long']],
+  Defense: (r) => [[r.tackles, 'tackles'], [r.tklSolo, 'solo'], [r.tklAst, 'ast'], [n1(r.tfl), 'TFL'], [n1(r.sacks), 'sacks'], [r.defInt, 'INT'], [r.pd, 'PD'], [r.ff, 'FF'], [r.fr, 'FR'], [r.defTd, 'TD']],
+  Kicking: (r) => [[`${r.fgm}/${r.fga}`, 'FG'], [`${n1(r.fgPct)}%`, ''], [r.fgLong, 'long'], [`${r.xpm}/${r.xpa}`, 'XP']],
+  Punting: (r) => [[r.punts, 'punts'], [r.puntYds, 'yds'], [n1(r.puntAvg), 'avg'], [r.puntLong, 'long'], [r.puntIn20, 'inside 20']],
+  Returns: (r) => [[r.kr, 'KR'], [r.krYds, 'KR yds'], [r.krTd, 'KR TD'], [r.pr, 'PR'], [r.prYds, 'PR yds'], [r.prTd, 'PR TD']],
+  'Offensive line': (r) => [[r.olSnaps, 'snaps'], [r.sacksAllowed, 'sacks allowed'], [r.penalties, 'penalties']],
+};
+const textLine = (title: string, name: string, r: Row) => `${name}: ${TEXT[title](r).filter(([v]) => v !== '—' && v != null).map(([v, l]) => (l ? `${v} ${l}` : String(v))).join(', ')}`;
+
+interface Section { title: string; text: string[]; sheet: string[][] }
+/** One section of a team's box score. Nothing is recomputed: values come from the stored result. */
+function section(b: (typeof BOX)[number], players: Row[], team: Row | undefined): Section | null {
   const rows = players.filter(b.filter).sort((x, y) => y[b.sort] - x[b.sort]);
   const tl = teamLine(team, b.title);
   if (!rows.length && !tl) return null;
-  const out = [['Player', 'Pos', '#', ...b.cols.map((c) => c[1])]];
-  for (const p of rows) out.push([p.name, p.position ?? '', p.jersey != null ? String(p.jersey) : '', ...b.cols.map((c) => cell(p[c[0]], c[2]))]);
-  if (tl) out.push(['Team', '', '', ...b.cols.map((c) => cell(tl[c[0]], c[2]))]);
-  return out;
+  const sheet = [['Player', 'Pos', '#', ...b.cols.map((c) => c[1])]];
+  for (const p of rows) sheet.push([p.name, p.position ?? '', p.jersey != null ? String(p.jersey) : '', ...b.cols.map((c) => cell(p[c[0]], c[2]))]);
+  if (tl) sheet.push(['Team', '', '', ...b.cols.map((c) => cell(tl[c[0]], c[2]))]);
+  const text = [...rows.map((p) => textLine(b.title, p.name, p)), ...(tl ? [textLine(b.title, 'Team', tl)] : [])];
+  return { title: b.title, text, sheet };
 }
 
-function render(fmt: Format, heading: string, sections: [string, string[][]][]): string {
-  if (fmt === 'sheet') return [heading, '', ...sections.flatMap(([t, rows]) => [t.toUpperCase(), ...rows.map((r) => r.join('\t')), ''])].join('\n').trimEnd();
-  const blocks = sections.map(([t, rows]) => {
-    // Plain text: player name + position in one column, numbers right-aligned.
-    const r2 = rows.map((r, i) => [i === 0 ? t.toUpperCase() : r[1] ? `${r[0]} (${r[1]}${r[2] ? ` #${r[2]}` : ''})` : r[0], ...r.slice(3)]);
-    const w = r2[0].map((_, k) => Math.max(...r2.map((r) => r[k].length)));
-    return r2.map((r) => r.map((v, k) => (k === 0 ? v.padEnd(w[k]) : v.padStart(w[k]))).join('  ').trimEnd()).join('\n');
-  });
-  return [heading, '', ...blocks.flatMap((b) => [b, ''])].join('\n').trimEnd();
+function render(fmt: Format, heading: string, sections: Section[]): string {
+  const body = sections.map((s) => (fmt === 'sheet' ? [s.title.toUpperCase(), ...s.sheet.map((r) => r.join('\t'))] : [s.title, ...s.text]).join('\n'));
+  return [heading, ...body].join('\n\n');
 }
 
 async function copyText(text: string) {
@@ -88,12 +98,12 @@ function Body({ d, side, setSide, fmt, setFmt, off, setOff, copied, setCopied, t
   const text = useMemo(() => {
     const players: Row[] = r.playerStats.map((l) => ({ ...derive(l as unknown as Row), name: d.players[l.playerId]?.name ?? 'Unknown player', position: d.players[l.playerId]?.position, jersey: d.players[l.playerId]?.jersey }));
     const label = r.mode === 'primetime' ? 'CFB 27 result' : 'Simulated';
-    const score = `${names[0]} ${r.final[0]}, ${names[1]} ${r.final[1]} — Week ${g.week} (${label})`;
+    const score = `${names[0]} ${r.final[0]}, ${names[1]} ${r.final[1]} (Week ${g.week}, ${label})`;
     const one = (s: 0 | 1) => {
-      const secs = BOX.filter((b) => !off.has(b.title)).map((b) => [b.title, sectionRows(b, players.filter((p) => p.side === s), r.teamStats[s] as unknown as Row)] as [string, string[][] | null]).filter((x): x is [string, string[][]] => !!x[1]);
-      return render(fmt, `${score}\n${names[s]} player stats`, secs);
+      const secs = BOX.filter((b) => !off.has(b.title)).map((b) => section(b, players.filter((p) => p.side === s), r.teamStats[s] as unknown as Row)).filter((x): x is Section => !!x);
+      return render(fmt, `${names[s]} player stats\n${score}`, secs);
     };
-    return side === 'both' ? `${one(0)}\n\n${one(1)}` : one(side);
+    return side === 'both' ? `${one(0)}\n\n\n${one(1)}` : one(side);
   }, [r, d.players, side, fmt, off, g.week, names[0], names[1]]);
   const go = async () => { await copyText(text); setCopied(true); setTimeout(() => setCopied(false), 2500); };
   const toggle = (t: string) => { const n = new Set(off); n.has(t) ? n.delete(t) : n.add(t); setOff(n); setCopied(false); };
@@ -110,10 +120,10 @@ function Body({ d, side, setSide, fmt, setFmt, off, setOff, copied, setCopied, t
       </div>
       <div className="mt-4 flex items-center gap-3">
         <Button variant="primary" onClick={go}>{copied ? <CheckIcon className="size-4" /> : <Copy className="size-4" />}{copied ? 'Copied' : 'Copy stats'}</Button>
-        <span className="text-xs text-ink-400">{fmt === 'sheet' ? 'Pastes into Google Sheets or Excel with one value per cell.' : 'Lined-up columns for messages and documents (use a monospace font to keep them aligned).'}</span>
+        <span className="text-xs text-ink-400">{fmt === 'sheet' ? 'Pastes into Google Sheets or Excel with one value per cell.' : 'One line per player: name, then every stat.'}</span>
       </div>
       {r.mode === 'primetime' && <Notice className="mt-3">This game is a CFB 27 reconstruction: the score is real, and only stats that were locked at import are real values; the rest were generated to fit the score.</Notice>}
-      <pre aria-label="Stats preview" className="scroll-x mt-3 max-h-[32rem] overflow-y-auto rounded-lg border border-ink-700 bg-ink-950 p-3 font-mono text-xs leading-relaxed text-ink-100">{text}</pre>
+      <pre aria-label="Stats preview" className="scroll-x mt-3 max-h-[32rem] overflow-y-auto rounded-lg border border-ink-700 bg-ink-950 p-3 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-100">{text}</pre>
     </Card>
   );
 }
