@@ -84,7 +84,9 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
    simulated: with no QB, the receivers still get their catches and the throws are credited to the team; with no
    receivers, the QB gets the passing line and the catches go to the team; with no kicker, kicks are the team's. Every
    total still balances (team passing = player + Team passing = player + Team receiving), and the box score shows a
-   *Team* row. No names are ever invented. Checked again by validation before a result can be approved.
+   *Team* row. On thin rosters (fewer than 4 WR, no TE, fewer than 3 RB) the targets and carries the missing players
+   would get also go to the team, so a lone WR or RB gets a normal starter's share (Simulation Settings → Thin rosters,
+   on by default). No names are ever invented. Checked again by validation before a result can be approved.
 2. **Independent percentages** — Activity, Upset and Star are rolled from separate random streams against their own
    percentage and drive different mechanisms. They are never added or averaged. Every roll is stored and shown.
 3. **Primetime score authority** — an imported CFB 27 score, imported period scores and locked statistics are inputs to a

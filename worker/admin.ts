@@ -814,7 +814,7 @@ adminRoutes.get('/rankings/recommendation', async (c) => {
 // ---------------------------------------------------------------------------------- settings, audit, summary
 const configSchema = z.object({
   homeFieldAdvantage: z.number().min(0).max(10), sackConvention: z.enum(['ncaa', 'nfl']), activityEffect: z.number().min(0).max(6), upsetGapClosure: z.number().min(0).max(1), starBoost: z.number().min(0).max(25), allowInactive: z.boolean(),
-  chaos: z.number().int().min(0).max(100), injuries: z.boolean(),
+  chaos: z.number().int().min(0).max(100), injuries: z.boolean(), fillDepth: z.boolean().default(true),
 });
 adminRoutes.get('/settings', async (c) => {
   const season = await getSeason(c.env.DB, c.req.query('season'));

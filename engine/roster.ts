@@ -18,7 +18,15 @@ export interface Lineup {
   defenders: RosterPlayer[];
   ol: RosterPlayer[];
   all: Map<string, RosterPlayer>;
+  /**
+   * Usage weight of the receivers / ball carriers a normal depth chart has but this roster does not (4 WR, 1 TE, 2 RB
+   * catching passes; 3 RB carrying). Used with SimConfig.fillDepth: that share of targets/carries is credited to the team.
+   */
+  teamRecW: number;
+  teamRushW: number;
 }
+/** Usage weights for depth-chart slots `have`..`depth` that the roster leaves empty. */
+const missingW = (have: number, w: number[], depth: number) => w.slice(Math.min(have, depth), depth).reduce((a, b) => a + b, 0);
 
 const rf = (p: RosterPlayer, pow = 2) => Math.pow((p.rating ?? 70) / 70, pow);
 
@@ -63,6 +71,9 @@ export function buildLineup(team: TeamInput, allowInactive = false): Lineup {
   add(slots(eligible(r, ['RB'], allowInactive), RB_REC_W));
   add(slots(eligible(r, ['FB'], allowInactive), [0.08, 0.03]));
 
+  const nWr = eligible(r, ['WR'], allowInactive).length, nTe = eligible(r, ['TE'], allowInactive).length, nRb = eligible(r, ['RB'], allowInactive).length;
+  const teamRecW = missingW(nWr, WR_W, 4) + missingW(nTe, TE_W, 1) + missingW(nRb, RB_REC_W, 2);
+  const teamRushW = missingW(nRb, DEPTH_W, 3);
   const kicker = eligible(r, ['K'], allowInactive)[0]?.p ?? null;
   const punter = eligible(r, ['P'], allowInactive)[0]?.p ?? eligible(r, ['K'], allowInactive)[0]?.p ?? null;
   const krList = eligible(r, ['KR'], allowInactive);
@@ -77,7 +88,7 @@ export function buildLineup(team: TeamInput, allowInactive = false): Lineup {
     const s = eligible(r, [pos], allowInactive).find((e) => !ol.includes(e.p));
     if (s) ol.push(s.p);
   }
-  return { qbs, rushers, receivers, kicker, punter, kr, pr, defenders, ol, all };
+  return { qbs, rushers, receivers, kicker, punter, kr, pr, defenders, ol, all, teamRecW, teamRushW };
 }
 
 export interface RosterCheck {
@@ -103,6 +114,10 @@ export function checkRoster(team: TeamInput, allowInactive = false): RosterCheck
   const nonQbReceivers = l.receivers.filter((s) => l.qbs.length !== 1 || s.p.id !== l.qbs[0].p.id);
   if (nonQbReceivers.length === 0) warnings.push(`${team.name} has no receiver (WR, TE, RB or FB): catches are credited to the team.`);
   if (l.rushers.length === 0) warnings.push(l.qbs.length ? `${team.name} has no RB/FB: every designed run is a quarterback keeper.` : `${team.name} has no RB, FB or QB: runs are credited to the team.`);
+  if (l.teamRecW > 0 || l.teamRushW > 0) {
+    const short = [['WR', 4], ['TE', 1], ['RB', 3]].filter(([pos, n]) => eligible(team.roster, [pos as Position], allowInactive).length < (n as number)).map(([pos]) => pos);
+    warnings.push(`${team.name} is short at ${short.join(', ')}: with the Thin rosters setting on, the catches and carries the missing players would get are credited to the team.`);
+  }
   if (!l.kicker) warnings.push(`${team.name} has no K: field goals and extra points are credited to the team.`);
   if (!l.punter) warnings.push(`${team.name} has no P or K: punts are credited to the team, not an individual.`);
   if (l.defenders.length === 0) warnings.push(`${team.name} has no defensive players: tackles, sacks and takeaways are credited to the team.`);

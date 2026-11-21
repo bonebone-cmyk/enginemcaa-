@@ -143,11 +143,23 @@ export class GameSim {
     return (this.rate(off, 'off') - this.rate(def, 'def')) / 12 + fatigue + this.boost[off];
   }
   /** A rostered player for the role, or null when the roster has nobody for it (the play is then credited to the team). */
-  private pickSlot(slots: Slot[], side: Side, exclude?: string, bias?: (s: Slot) => number): RosterPlayer | null {
+  /** `teamW`: usage weight of depth-chart players the roster does not have; when that share is drawn the team is credited. */
+  private pickSlot(slots: Slot[], side: Side, exclude?: string, bias?: (s: Slot) => number, teamW = 0): RosterPlayer | null {
     const pool = exclude ? slots.filter((s) => s.p.id !== exclude) : slots;
     if (!pool.length) return null;
     const st = this.stars(side);
-    return this.rng.weighted(pool, (s) => s.w * (st.has(s.p.id) ? 1.5 : 1) * (bias ? bias(s) : 1)).p;
+    const w = (s: Slot) => s.w * (st.has(s.p.id) ? 1.5 : 1) * (bias ? bias(s) : 1);
+    if (teamW > 0) {
+      const total = pool.reduce((a, s) => a + w(s), 0);
+      if (this.rng.next() * (total + teamW) >= total) return null;
+    }
+    return this.rng.weighted(pool, w).p;
+  }
+  private teamRecW(side: Side) {
+    return this.cfg.fillDepth ? this.sides[side].lineup.teamRecW : 0;
+  }
+  private teamRushW(side: Side) {
+    return this.cfg.fillDepth ? this.sides[side].lineup.teamRushW : 0;
   }
   private qb(side: Side): RosterPlayer | null {
     return this.sides[side].lineup.qbs[0]?.p ?? null;
@@ -539,7 +551,9 @@ export class GameSim {
     const dprof = DEF_PROFILE[this.sides[def].team.defScheme];
     const e = this.edge(off);
     const qb = this.qb(off);
-    const rusher = !S.lineup.rushers.length || this.rng.chance(prof.qbRun + (this.dist <= 1 ? 0.1 : 0)) ? qb : this.pickSlot(S.lineup.rushers, off);
+    // With fillDepth, a team without RBs hands its designed runs to the (team-credited) missing backs, not the QB.
+    const noBacks = !S.lineup.rushers.length && !(this.teamRushW(off) > 0 && qb);
+    const rusher = noBacks || this.rng.chance(prof.qbRun + (this.dist <= 1 ? 0.1 : 0)) ? qb : S.lineup.rushers.length ? this.pickSlot(S.lineup.rushers, off, undefined, undefined, this.teamRushW(off)) : null;
     const star = this.isStar(off, rusher);
     const toGoal = 100 - this.ballOn;
     let mean = 3.6 + 1.0 * e + prof.runYds - dprof.runDef + (this.pr(off, rusher) - 70) * 0.03;
@@ -614,7 +628,7 @@ export class GameSim {
       if (depth === 'short') return pos === 'WR' ? 0.9 : 1.35;
       return 1;
     };
-    const target = this.pickSlot(S.lineup.receivers, off, qb?.id, bias);
+    const target = this.pickSlot(S.lineup.receivers, off, qb?.id, bias, this.teamRecW(off));
     const star = this.isStar(off, target) || this.isStar(off, qb);
     const tr = this.pr(off, target);
 
@@ -850,10 +864,10 @@ export class GameSim {
     const pass = this.rng.chance(0.62) || !S.lineup.rushers.length;
     const hasTarget = S.lineup.receivers.some((s) => s.p.id !== qb?.id);
     if (pass && hasTarget) {
-      const target = this.pickSlot(S.lineup.receivers, side, qb?.id);
+      const target = this.pickSlot(S.lineup.receivers, side, qb?.id, undefined, this.teamRecW(side));
       this.emit({ type: 'two_point', offense: side, passer: qb?.id, target: target?.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
     } else {
-      const rusher = S.lineup.rushers.length ? this.pickSlot(S.lineup.rushers, side) : qb;
+      const rusher = S.lineup.rushers.length ? this.pickSlot(S.lineup.rushers, side, undefined, undefined, this.teamRushW(side)) : qb;
       this.emit({ type: 'two_point', offense: side, rusher: rusher?.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
     }
     this.ballOn = savedBall;

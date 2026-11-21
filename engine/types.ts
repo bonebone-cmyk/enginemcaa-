@@ -78,6 +78,12 @@ export interface SimConfig {
   chaos: number;
   /** Players can be injured during simulated games. Never applied to imported CFB 27 results. */
   injuries: boolean;
+  /**
+   * Thin rosters: when a team is missing depth at WR, TE or RB, the targets and carries those missing players would get
+   * are credited to the team instead of all going to the few rostered players. A lone WR then gets a normal starter's
+   * share, not every catch. No player is invented; the missing players' share appears on the "Team" line.
+   */
+  fillDepth: boolean;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -91,6 +97,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   allowInactive: false,
   chaos: 25,
   injuries: true,
+  fillDepth: true,
 };
 
 export type PlayType = 'kickoff' | 'run' | 'pass' | 'sack' | 'punt' | 'field_goal' | 'extra_point' | 'two_point' | 'kneel' | 'penalty' | 'timeout';

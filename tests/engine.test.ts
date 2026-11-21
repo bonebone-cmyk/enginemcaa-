@@ -155,6 +155,29 @@ describe('roster-only statistics', () => {
       }
     }
   });
+  it('thin rosters: a lone WR or RB gets a starter\'s share, the missing players\' share goes to the team', () => {
+    const thin = makeTeam('AAA');
+    const keep = new Set<string>();
+    thin.roster = thin.roster.filter((p) => { if (['QB', 'WR', 'RB'].includes(p.position)) { if (keep.has(p.position)) return false; keep.add(p.position); return true; } return !['TE', 'FB'].includes(p.position); });
+    const wr = thin.roster.find((p) => p.position === 'WR')!.id;
+    expect(checkRoster(thin).warnings.join(' ')).toMatch(/short at WR, TE, RB/);
+    const share = (fillDepth: boolean) => {
+      let wrRec = 0, rec = 0;
+      for (let i = 0; i < 20; i++) {
+        const r = game(`thin-${i}`, thin, makeTeam('HHH'), { fillDepth });
+        expect(allValid(r)).toBe(true);
+        wrRec += r.playerStats.find((x) => x.playerId === wr)?.rec ?? 0;
+        rec += r.teamStats[0].passCmp;
+        if (!fillDepth) expect(r.teamStats[0].teamRec).toBe(0);
+      }
+      return wrRec / rec;
+    };
+    expect(share(true)).toBeLessThan(0.45);
+    expect(share(false)).toBeGreaterThan(0.6);
+    // A full roster is not affected: nothing is credited to the team.
+    const full = game('full-depth', makeTeam('AAA'), makeTeam('HHH'), { injuries: false });
+    expect(full.teamStats[0].teamRec + full.teamStats[0].teamTargets).toBe(0);
+  });
   it('falls back to authorized secondary positions, then to team-level attribution, never to made-up names', () => {
     // WR listed with QB as a secondary position becomes the passer when no QB is rostered.
     const sec = makeTeam('AAA'); sec.roster = sec.roster.filter((p) => p.position !== 'QB');
@@ -202,10 +225,10 @@ describe('statistical consistency', () => {
       const r = game(`recon-${i}`);
       for (const s of [0, 1]) {
         const t = r.teamStats[s], o = r.teamStats[1 - s];
-        expect(sum(r, s, (l) => l.passYds)).toBe(t.passYds);
-        expect(sum(r, s, (l) => l.recYds)).toBe(t.passYds);
-        expect(sum(r, s, (l) => l.passCmp)).toBe(sum(r, s, (l) => l.rec));
-        expect(sum(r, s, (l) => l.passTd)).toBe(sum(r, s, (l) => l.recTd));
+        expect(sum(r, s, (l) => l.passYds) + t.teamPassYds).toBe(t.passYds);
+        expect(sum(r, s, (l) => l.recYds) + t.teamRecYds).toBe(t.passYds);
+        expect(sum(r, s, (l) => l.passCmp) + t.teamPassCmp).toBe(sum(r, s, (l) => l.rec) + t.teamRec);
+        expect(sum(r, s, (l) => l.passTd) + t.teamPassTd).toBe(sum(r, s, (l) => l.recTd) + t.teamRecTd);
         expect(sum(r, s, (l) => l.rushYds) + t.teamRushYds).toBe(t.rushYds);
         expect(t.totalYds).toBe(t.passYds + t.rushYds);
         // Defensive takeaways equal the opponent's giveaways.
@@ -220,7 +243,7 @@ describe('statistical consistency', () => {
         const two = r.plays.filter((p) => p.type === 'two_point' && p.good && p.offense === s).length;
         const saf = r.plays.filter((p) => p.points?.kind === 'SAFETY' && p.points.side === s).length;
         expect(6 * td + 3 * fg + xp + 2 * two + 2 * saf).toBe(r.final[s]);
-        expect(sum(r, s, (l) => l.rushTd + l.recTd + l.defTd + l.krTd + l.prTd)).toBe(td);
+        expect(sum(r, s, (l) => l.rushTd + l.recTd + l.defTd + l.krTd + l.prTd) + t.teamRecTd + t.teamRushTd).toBe(td);
       }
     }
   });
