@@ -1,4 +1,4 @@
-import { CalendarDays, ClipboardCheck, Gauge, History, ListOrdered, LogOut, Percent, Send, Settings as SettingsIcon, Shield, Tv, Users, UsersRound } from 'lucide-react';
+import { CalendarDays, ClipboardCheck, ClipboardCopy, Gauge, History, ListOrdered, LogOut, Percent, Send, Settings as SettingsIcon, Shield, Tv, Users, UsersRound } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { api, useApi } from '../../api';
@@ -6,12 +6,13 @@ import { SeasonSelect, fmtAgo, useSeason } from '../../shared';
 import { Badge, Button, Card, ErrorBox, Field, Input, Notice, Spinner, cx, useAction } from '../../ui';
 import { RosterManager, ScheduleManager, TeamManager } from './data';
 import { AuditHistory, Percentages, RankingsManager, SimSettings } from './misc';
+import { CopyStats } from './copystats';
 import { PrimetimeImport } from './primetime';
 import { PublishingCenter, ResultsReview, RunDetail, SimulationCenter } from './sim';
 
 const SECTIONS: [string, string, typeof Gauge][] = [
   ['simulation', 'Simulation Center', Gauge], ['primetime', 'Primetime Import', Tv], ['schedule', 'Schedule Manager', CalendarDays], ['teams', 'Team Manager', Shield], ['roster', 'Roster Manager', UsersRound],
-  ['percentages', 'Team Percentages', Percent], ['rankings', 'Rankings Manager', ListOrdered], ['review', 'Results Review', ClipboardCheck], ['publishing', 'Publishing Center', Send], ['settings', 'Simulation Settings', SettingsIcon], ['audit', 'Audit History', History],
+  ['percentages', 'Team Percentages', Percent], ['rankings', 'Rankings Manager', ListOrdered], ['review', 'Results Review', ClipboardCheck], ['publishing', 'Publishing Center', Send], ['copy-stats', 'Copy Stats', ClipboardCopy], ['settings', 'Simulation Settings', SettingsIcon], ['audit', 'Audit History', History],
 ];
 
 function Frame({ children, title }: { children: ReactNode; title: string }) {
@@ -183,6 +184,7 @@ function Shell({ admin, onLogout }: { admin: { name: string; email: string }; on
             <Route index element={<Overview />} />
             <Route path="simulation" element={<SimulationCenter />} />
             <Route path="primetime" element={<PrimetimeImport />} />
+            <Route path="copy-stats" element={<CopyStats />} />
             <Route path="schedule" element={<ScheduleManager />} />
             <Route path="teams" element={<TeamManager />} />
             <Route path="roster" element={<RosterManager />} />

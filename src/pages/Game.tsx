@@ -52,7 +52,7 @@ function Scoreboard({ g, quarters, labels }: { g: GameT; quarters: [number[], nu
 }
 
 // ------------------------------------------------------------------ box score
-const BOX: { title: string; filter: (p: Row) => boolean; sort: string; cols: [string, string, number?][] }[] = [
+export const BOX: { title: string; filter: (p: Row) => boolean; sort: string; cols: [string, string, number?][] }[] = [
   { title: 'Passing', filter: (p) => p.passAtt > 0, sort: 'passYds', cols: [['passCmp', 'C'], ['passAtt', 'Att'], ['passYds', 'Yds'], ['cmpPct', 'Pct', 1], ['passTd', 'TD'], ['passInt', 'Int'], ['sacked', 'Sk'], ['passRating', 'Rtg', 1]] },
   { title: 'Rushing', filter: (p) => p.rushAtt > 0, sort: 'rushYds', cols: [['rushAtt', 'Car'], ['rushYds', 'Yds'], ['ypc', 'Avg', 1], ['rushTd', 'TD'], ['rushLong', 'Lg'], ['fumbles', 'Fum']] },
   { title: 'Receiving', filter: (p) => p.targets > 0, sort: 'recYds', cols: [['targets', 'Tgt'], ['rec', 'Rec'], ['recYds', 'Yds'], ['ypr', 'Avg', 1], ['recTd', 'TD'], ['recLong', 'Lg']] },
@@ -63,7 +63,7 @@ const BOX: { title: string; filter: (p: Row) => boolean; sort: string; cols: [st
   { title: 'Offensive line', filter: (p) => p.olSnaps > 0, sort: 'olSnaps', cols: [['olSnaps', 'Snaps'], ['sacksAllowed', 'Sk Alw'], ['penalties', 'Pen']] },
 ];
 /** The "Team" line: anything no rostered player could be credited with (for example passes when no QB is rostered). */
-function teamLine(t: Row | undefined, title: string): Row | null {
+export function teamLine(t: Row | undefined, title: string): Row | null {
   if (!t) return null;
   const d = (x: number, y: number) => (y ? Math.round((x / y) * 10) / 10 : 0);
   const m: Record<string, Row> = {

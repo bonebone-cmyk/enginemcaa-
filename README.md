@@ -109,6 +109,7 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 - Public site: home/scoreboard/featured game/league digest, schedule with filters, game page (summary, box score, team
   stats, play-by-play, highlights, scoring, score chart), team pages, player pages, rankings, sortable leaderboards with minimum-attempt rules, multi-season switching.
 - Admin: Simulation Center (single game, Regenerate, Simulate Week with per-game isolation), Primetime Import Center,
+  Copy Stats (pick a game and a team, copy its player stats as lined-up text or as a spreadsheet table),
   Schedule/Team/Roster managers (CSV roster import, logos), Team Percentages (edit in a table or import CSV/JSON; stored in D1),
   Rankings Manager (manual + computed suggestion), Results Review, Publishing Center (instant or replay presentation,
   corrections, withdrawals, version history), Simulation Settings, Audit History.

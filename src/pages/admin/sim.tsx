@@ -217,7 +217,7 @@ export function ResultsReview() {
   );
 }
 
-const derive = (l: Row) => {
+export const derive = (l: Row) => {
   const d = (a: number, b: number) => (b ? Math.round((a / b) * 10) / 10 : 0);
   return { ...l, tackles: l.tklSolo + l.tklAst, cmpPct: d(100 * l.passCmp, l.passAtt), ypa: d(l.passYds, l.passAtt), passRating: passerRating(l.passCmp, l.passAtt, l.passYds, l.passTd, l.passInt), ypc: d(l.rushYds, l.rushAtt), ypr: d(l.recYds, l.rec), fgPct: d(100 * l.fgm, l.fga), puntAvg: d(l.puntYds, l.punts) };
 };
