@@ -6,6 +6,9 @@ export type DB = D1Database;
 
 export const PLAYER_STAT_COLS = Object.keys(emptyPlayerLine('', 0)).filter((k) => k !== 'playerId' && k !== 'side');
 export const TEAM_STAT_COLS = Object.keys(emptyTeamLine(0)).filter((k) => k !== 'side');
+/** Team stat columns that existed when migration 1 shipped. Later columns are added by their own migration. */
+const TEAM_STAT_COLS_V1 = TEAM_STAT_COLS.slice(0, TEAM_STAT_COLS.indexOf('teamPassAtt'));
+const TEAM_STAT_COLS_V6 = TEAM_STAT_COLS.slice(TEAM_STAT_COLS.indexOf('teamPassAtt'));
 
 const num = (cols: string[]) => cols.map((c) => `${c} REAL NOT NULL DEFAULT 0`).join(', ');
 
@@ -90,7 +93,7 @@ export const MIGRATIONS: string[][] = [
     `CREATE INDEX pgs_player ON player_game_stats(player_id)`,
     `CREATE INDEX pgs_season ON player_game_stats(season_id, team_id)`,
     `CREATE TABLE team_game_stats (game_id TEXT NOT NULL REFERENCES games(id), run_id TEXT NOT NULL, season_id TEXT NOT NULL, team_id TEXT NOT NULL REFERENCES teams(id), opponent_id TEXT NOT NULL, is_home INTEGER NOT NULL,
-       ${num(TEAM_STAT_COLS)}, PRIMARY KEY (game_id, team_id))`,
+       ${num(TEAM_STAT_COLS_V1)}, PRIMARY KEY (game_id, team_id))`,
     `CREATE TABLE highlights (game_id TEXT NOT NULL REFERENCES games(id), run_id TEXT NOT NULL, play_seq INTEGER NOT NULL, quarter INTEGER NOT NULL, clock INTEGER NOT NULL, team_id TEXT NOT NULL,
        title TEXT NOT NULL, text TEXT NOT NULL, rank INTEGER NOT NULL, tags TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (game_id, play_seq),
        FOREIGN KEY (game_id, play_seq) REFERENCES play_events(game_id, seq) DEFERRABLE INITIALLY DEFERRED)`,
@@ -143,6 +146,8 @@ export const MIGRATIONS: string[][] = [
        games_out INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (game_id, play_seq))`,
     `CREATE INDEX injuries_team ON injuries(season_id, team_id)`,
   ],
+  // 6: team-credited totals, so a team can play without a full roster and every total still balances.
+  TEAM_STAT_COLS_V6.map((c) => `ALTER TABLE team_game_stats ADD COLUMN ${c} REAL NOT NULL DEFAULT 0`),
 ];
 
 let ready: Promise<void> | null = null;

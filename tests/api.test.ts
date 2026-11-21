@@ -378,17 +378,35 @@ describe('simulation, review and publishing', () => {
   it('isolates failures in a batch: one bad game does not affect the others', async () => {
     const good = await addGame(admin, L.season, 3, L.teams.AAA, L.teams.CCC);
     const bad = await addGame(admin, L.season, 3, L.teams.BBB, L.teams.DDD);
-    // Deactivate every DDD quarterback so that game cannot be simulated.
-    const roster = (await admin.get(`/admin/roster?season=${L.season}&team=${L.teams.DDD}`)).json.players;
-    for (const p of roster.filter((x: any) => x.position === 'QB')) await admin.patch(`/admin/roster/${p.id}`, { active: false });
+    // Remove DDD's percentages so that game cannot be simulated (percentages are never invented).
+    const kept = (await admin.get(`/admin/percentages?season=${L.season}`)).json.teams.find((t: any) => t.teamId === L.teams.DDD);
+    await admin.put('/admin/percentages', { seasonId: L.season, clear: [L.teams.DDD] });
     const results = [];
-    for (const g of [bad, good]) results.push(await admin.post(`/admin/games/${g}/simulate`, { seed: `batch-${g}`, snapshotId: L.snapshotId }));
+    for (const g of [bad, good]) results.push(await admin.post(`/admin/games/${g}/simulate`, { seed: `batch-${g}` }));
     expect(results[0].status).toBe(422);
-    expect(results[0].json.error).toMatch(/no rostered QB/);
+    expect(results[0].json.code).toBe('MISSING_PERCENTAGES');
     expect(results[1].status).toBe(201);
-    const pre = (await admin.get(`/admin/games/${bad}/preflight`)).json.teams;
-    expect(pre.find((t: any) => t.teamId === L.teams.DDD).errors.length).toBeGreaterThan(0);
-    for (const p of roster.filter((x: any) => x.position === 'QB')) await admin.patch(`/admin/roster/${p.id}`, { active: true });
+    await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: L.teams.DDD, activity: kept.activity, upset: kept.upset, star: kept.star }] });
+  });
+  it('simulates a team that has no players at all, crediting everything to the team', async () => {
+    const id = (await admin.post('/admin/teams', { name: 'Empty Roster U', shortName: 'Empty', abbr: 'EMP' })).json.id;
+    await admin.put(`/admin/teams/${id}/season`, { seasonId: L.season });
+    await admin.put('/admin/percentages', { seasonId: L.season, set: [{ teamId: id, activity: 50, upset: 50, star: 50 }] });
+    const g = await addGame(admin, L.season, 12, id, L.teams.AAA);
+    const pre = (await admin.get(`/admin/games/${g}/preflight`)).json.teams.find((t: any) => t.teamId === id);
+    expect(pre.errors).toEqual([]);
+    expect(pre.warnings.join(' ')).toMatch(/no active rostered players/);
+    const sim = await admin.post(`/admin/games/${g}/simulate`, { seed: 'empty-team' });
+    expect(sim.status).toBe(201);
+    expect(sim.json.valid).toBe(true);
+    await admin.post(`/admin/runs/${sim.json.runId}/approve`);
+    expect((await admin.post(`/admin/runs/${sim.json.runId}/publish`, {})).status).toBe(200);
+    const view = (await pub.get(`/games/${g}`)).json.result;
+    expect(view.playerStats.some((p: any) => p.teamId === id)).toBe(false);
+    const ts = view.teamStats.find((t: any) => t.teamId === id);
+    expect(ts.teamPassYds).toBe(ts.passYds);
+    expect(ts.teamRecYds).toBe(ts.passYds);
+    await admin.post(`/admin/games/${g}/unpublish`, { reason: 'test cleanup', confirm: true });
   });
 });
 

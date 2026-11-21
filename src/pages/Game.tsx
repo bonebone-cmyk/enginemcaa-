@@ -62,7 +62,23 @@ const BOX: { title: string; filter: (p: Row) => boolean; sort: string; cols: [st
   { title: 'Returns', filter: (p) => p.kr + p.pr > 0, sort: 'krYds', cols: [['kr', 'KR'], ['krYds', 'KR Yds'], ['krTd', 'KR TD'], ['pr', 'PR'], ['prYds', 'PR Yds'], ['prTd', 'PR TD']] },
   { title: 'Offensive line', filter: (p) => p.olSnaps > 0, sort: 'olSnaps', cols: [['olSnaps', 'Snaps'], ['sacksAllowed', 'Sk Alw'], ['penalties', 'Pen']] },
 ];
-export function BoxScore({ players, teams, primetime }: { players: Row[]; teams: [TeamRef, TeamRef]; primetime: boolean }) {
+/** The "Team" line: anything no rostered player could be credited with (for example passes when no QB is rostered). */
+function teamLine(t: Row | undefined, title: string): Row | null {
+  if (!t) return null;
+  const d = (x: number, y: number) => (y ? Math.round((x / y) * 10) / 10 : 0);
+  const m: Record<string, Row> = {
+    Passing: { passCmp: t.teamPassCmp, passAtt: t.teamPassAtt, passYds: t.teamPassYds, cmpPct: d(100 * t.teamPassCmp, t.teamPassAtt), passTd: t.teamPassTd, passInt: t.teamPassInt, sacked: t.teamSacked, passRating: t.teamPassAtt ? Math.round(((8.4 * t.teamPassYds + 330 * t.teamPassTd + 100 * t.teamPassCmp - 200 * t.teamPassInt) / t.teamPassAtt) * 10) / 10 : 0, _show: t.teamPassAtt + t.teamSacked },
+    Rushing: { rushAtt: t.teamRushAtt, rushYds: t.teamRushYds, ypc: d(t.teamRushYds, t.teamRushAtt), rushTd: t.teamRushTd, rushLong: '—', fumbles: t.teamFumbles, _show: t.teamRushAtt },
+    Receiving: { targets: t.teamTargets, rec: t.teamRec, recYds: t.teamRecYds, ypr: d(t.teamRecYds, t.teamRec), recTd: t.teamRecTd, recLong: '—', _show: t.teamTargets + t.teamRec },
+    Defense: { tackles: t.teamTackles, tklSolo: '—', tklAst: '—', tfl: 0, sacks: t.teamSacks, defInt: t.teamInt, pd: 0, ff: 0, fr: t.teamFr, defTd: 0, _show: t.teamTackles + t.teamSacks + t.teamInt + t.teamFr },
+    Kicking: { fgm: t.teamFgm, fga: t.teamFga, fgPct: d(100 * t.teamFgm, t.teamFga), fgLong: '—', xpm: t.teamXpm, xpa: t.teamXpa, _show: t.teamFga + t.teamXpa },
+    Punting: { punts: t.teamPunts, puntYds: t.teamPuntYds, puntAvg: d(t.teamPuntYds, t.teamPunts), puntLong: '—', puntIn20: '—', _show: t.teamPunts },
+  };
+  const r = m[title];
+  return r && Number(r._show) > 0 ? r : null;
+}
+
+export function BoxScore({ players, teams, primetime, teamStats }: { players: Row[]; teams: [TeamRef, TeamRef]; primetime: boolean; teamStats?: Row[] | null }) {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       {teams.map((t) => (
@@ -70,7 +86,8 @@ export function BoxScore({ players, teams, primetime }: { players: Row[]; teams:
           <h3 className="flex items-center gap-2 font-display text-xl font-bold uppercase"><TeamLogo team={t} size={26} />{t.name}</h3>
           {BOX.map((b) => {
             const rows = players.filter((p) => p.teamId === t.id && b.filter(p)).sort((x, y) => y[b.sort] - x[b.sort]);
-            if (!rows.length) return null;
+            const tl = teamLine(teamStats?.find((x) => x.teamId === t.id), b.title);
+            if (!rows.length && !tl) return null;
             return (
               <Card key={b.title} title={b.title} pad={false}>
                 <div className="scroll-x"><table className="w-full">
@@ -82,7 +99,11 @@ export function BoxScore({ players, teams, primetime }: { players: Row[]; teams:
                         const locked = primetime && (p.lockedFields ?? []).includes(c[0] === 'tackles' ? 'tackles' : c[0]);
                         return <td key={c[0]} className={cx(tdr, locked && 'font-semibold text-violet-200')} title={locked ? 'Verified CFB 27 statistic' : undefined}>{c[2] ? Number(p[c[0]]).toFixed(c[2]) : p[c[0]]}{locked && <sup className="ml-0.5">✓</sup>}</td>;
                       })}
-                    </tr>))}</tbody>
+                    </tr>))}
+                    {tl && <tr className="border-t border-ink-700 bg-ink-900/60" title="Credited to the team: no rostered player fills this role">
+                      <td className={cx(td, 'italic text-ink-300')}>Team</td>
+                      {b.cols.map((c) => <td key={c[0]} className={cx(tdr, 'text-ink-300')}>{typeof tl[c[0]] === 'number' && c[2] ? Number(tl[c[0]]).toFixed(c[2]) : tl[c[0]] ?? 0}</td>)}
+                    </tr>}</tbody>
                 </table></div>
               </Card>);
           })}
@@ -363,7 +384,7 @@ export function GamePage() {
                   {r.injuries?.length > 0 && <InjuryList list={r.injuries} teams={teams} />}
                 </div>
               </div>)}
-            {tab === 'box' && <>{prime && <p className="text-xs text-ink-400">{d.labels.stats}.</p>}<BoxScore players={r.playerStats} teams={teams} primetime={prime} /></>}
+            {tab === 'box' && <>{prime && <p className="text-xs text-ink-400">{d.labels.stats}.</p>}<BoxScore players={r.playerStats} teams={teams} primetime={prime} teamStats={r.teamStats} /></>}
             {tab === 'team' && <TeamStats stats={r.teamStats} teams={teams} />}
             {tab === 'pbp' && <><p className="text-xs text-ink-400">{d.labels.playByPlay}.</p><PlayByPlay plays={r.plays} drives={r.drives} teams={teams} /></>}
             {tab === 'highlights' && <Highlights list={r.highlights} teams={teams} generated={prime ? `${d.labels.highlights}.` : undefined} />}

@@ -23,6 +23,8 @@ export function emptyTeamLine(side: Side): TeamLine {
     turnovers: 0, intThrown: 0, fumblesLost: 0, penalties: 0, penaltyYds: 0, top: 0, sacks: 0, sackYds: 0,
     rzAtt: 0, rzScores: 0, rzTd: 0, punts: 0, puntYds: 0,
     teamRushAtt: 0, teamRushYds: 0, teamTackles: 0, teamSacks: 0, teamInt: 0, teamFr: 0, teamPunts: 0, teamPuntYds: 0,
+    teamPassAtt: 0, teamPassCmp: 0, teamPassYds: 0, teamPassTd: 0, teamPassInt: 0, teamSacked: 0, teamSackYdsLost: 0,
+    teamTargets: 0, teamRec: 0, teamRecYds: 0, teamRecTd: 0, teamFumbles: 0, teamFgm: 0, teamFga: 0, teamXpm: 0, teamXpa: 0, teamRushTd: 0,
   };
 }
 
@@ -109,12 +111,13 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
       }
     };
     const fumble = () => {
-      if (!p.fumbler) return;
-      const f = L(p.fumbler, off)!;
-      f.fumbles++;
+      if (!p.fumbler && !p.fumbleLost) return;
+      const f = L(p.fumbler, off);
+      if (f) f.fumbles++;
+      else to.teamFumbles++;
       if (p.forcedBy) L(p.forcedBy, def)!.ff++;
       if (p.fumbleLost) {
-        f.fumblesLost++;
+        if (f) f.fumblesLost++;
         to.fumblesLost++;
         to.turnovers++;
         if (p.recoveredBy) {
@@ -135,7 +138,7 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
           r.rushYds += p.yards;
           r.rushLong = Math.max(r.rushLong, p.yards);
           if (p.td === off) r.rushTd++;
-        } else (to.teamRushAtt++, (to.teamRushYds += p.yards));
+        } else (to.teamRushAtt++, (to.teamRushYds += p.yards), p.td === off && to.teamRushTd++);
         if (p.firstDown) (to.firstDowns++, to.firstDownsRush++);
         tackles();
         fumble();
@@ -150,6 +153,7 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
       case 'sack': {
         const qb = L(p.passer, off);
         if (qb) (qb.sacked++, (qb.sackYdsLost += -p.yards));
+        else (to.teamSacked++, (to.teamSackYdsLost += -p.yards));
         td.sacks++;
         td.sackYds += -p.yards;
         if (ncaa) {
@@ -175,13 +179,18 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
         to.passAtt++;
         const qb = L(p.passer, off);
         const tg = L(p.target, off);
+        // With no rostered passer or receiver, that half of the play is credited to the team so totals still balance.
         if (qb) qb.passAtt++;
+        else to.teamPassAtt++;
         if (tg) tg.targets++;
+        else if (!p.turnover) to.teamTargets++;
         if (p.complete) {
           to.passCmp++;
           to.passYds += p.yards;
           if (qb) (qb.passCmp++, (qb.passYds += p.yards), (qb.passLong = Math.max(qb.passLong, p.yards)), p.td === off && qb.passTd++);
+          else (to.teamPassCmp++, (to.teamPassYds += p.yards), p.td === off && to.teamPassTd++);
           if (tg) (tg.rec++, (tg.recYds += p.yards), (tg.recLong = Math.max(tg.recLong, p.yards)), p.td === off && tg.recTd++);
+          else (to.teamRec++, (to.teamRecYds += p.yards), p.td === off && to.teamRecTd++);
           if (p.firstDown) (to.firstDowns++, to.firstDownsPass++);
           tackles();
           fumble();
@@ -189,6 +198,7 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
           to.intThrown++;
           to.turnovers++;
           if (qb) qb.passInt++;
+          else to.teamPassInt++;
           const d = L(p.interceptor, def);
           if (d) (d.defInt++, (d.intRetYds += p.returnYards ?? 0), p.td === def && d.defTd++);
           else td.teamInt++;
@@ -215,12 +225,14 @@ export function computeStats(plays: Play[], teams: [TeamInput, TeamInput], cfg: 
       case 'field_goal': {
         const k = L(p.kicker, off);
         if (k) (k.fga++, p.good && (k.fgm++, (k.fgLong = Math.max(k.fgLong, p.fgDistance ?? 0))));
+        else (to.teamFga++, p.good && to.teamFgm++);
         if (p.blockedBy) L(p.blockedBy, def)!.blocks++;
         break;
       }
       case 'extra_point': {
         const k = L(p.kicker, off);
         if (k) (k.xpa++, p.good && k.xpm++);
+        else (to.teamXpa++, p.good && to.teamXpm++);
         break;
       }
       case 'two_point':

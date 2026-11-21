@@ -127,32 +127,52 @@ describe('roster-only statistics', () => {
     expect(pass).toBeGreaterThan(0);
     expect(tackles).toBeGreaterThan(0);
   });
-  it('stops instead of inventing a player when a required position is missing', () => {
+  it('plays with a partial or empty roster, crediting the team instead of inventing a player', () => {
+    const sum = (r: ReturnType<typeof game>, f: (l: any) => number) => r.playerStats.filter((l) => l.side === 0).reduce((a, l) => a + f(l), 0);
+    // No QB: receivers still get their catches; the throws are the team's. Passing and receiving still balance.
     const noQb = makeTeam('AAA'); noQb.roster = noQb.roster.filter((p) => p.position !== 'QB');
-    expect(() => game('x', noQb)).toThrow(SimError);
-    expect(checkRoster(noQb).errors.join(' ')).toMatch(/no rostered QB/);
-    const noRec = makeTeam('AAA'); noRec.roster = noRec.roster.filter((p) => !['WR', 'TE', 'RB', 'FB'].includes(p.position));
-    expect(() => game('x', noRec)).toThrow(/no rostered receiver/);
-    const empty = makeTeam('AAA'); empty.roster = [];
-    expect(() => game('x', empty)).toThrow(SimError);
+    expect(checkRoster(noQb).errors).toEqual([]);
+    expect(checkRoster(noQb).warnings.join(' ')).toMatch(/no QB: passes are thrown by the team/);
+    for (let i = 0; i < 20; i++) {
+      const r = game(`noqb-${i}`, noQb);
+      const t = r.teamStats[0];
+      expect(allValid(r)).toBe(true);
+      expect(sum(r, (l) => l.passAtt)).toBe(0);
+      expect(t.teamPassYds).toBe(t.passYds);
+      expect(sum(r, (l) => l.recYds) + t.teamRecYds).toBe(t.passYds);
+      expect(sum(r, (l) => l.rec)).toBeGreaterThan(0);
+    }
+    // Receivers only, QB only, defense only and no players at all.
+    const only = (pos: string[]) => { const t = makeTeam('AAA'); t.roster = t.roster.filter((p) => pos.includes(p.position)); return t; };
+    for (const [k, t] of [['wr', only(['WR'])], ['qb', only(['QB'])], ['def', only(['LB', 'CB'])], ['empty', only([])]] as const) {
+      const ids = new Set(t.roster.map((p) => p.id));
+      for (let i = 0; i < 15; i++) {
+        const r = game(`${k}-${i}`, t);
+        expect(allValid(r), `${k}: ${JSON.stringify(r.validation.filter((v) => !v.ok))}`).toBe(true);
+        for (const l of r.playerStats.filter((x) => x.side === 0)) expect(ids.has(l.playerId)).toBe(true);
+        if (k === 'qb') expect(r.teamStats[0].teamRecYds).toBe(r.teamStats[0].passYds); // catches are the team's
+        if (k === 'empty') expect(r.playerStats.filter((x) => x.side === 0)).toEqual([]);
+      }
+    }
   });
   it('falls back to authorized secondary positions, then to team-level attribution, never to made-up names', () => {
     // WR listed with QB as a secondary position becomes the passer when no QB is rostered.
     const sec = makeTeam('AAA'); sec.roster = sec.roster.filter((p) => p.position !== 'QB');
     sec.roster.find((p) => p.id === 'AAA-WR4')!.secondary = ['QB'];
     expect(game('sec', sec).playerStats.find((l) => l.playerId === 'AAA-WR4')!.passAtt).toBeGreaterThan(10);
-    // No kicker: no field goals or extra points are attempted; the team goes for two.
+    // No kicker: the team still kicks field goals and extra points, credited to the team.
     const noK = makeTeam('AAA'); noK.roster = noK.roster.filter((p) => p.position !== 'K' && p.position !== 'P');
-    let kicks = 0, twos = 0, teamPunts = 0;
+    let kicks = 0, teamKicks = 0, teamPunts = 0;
     for (let i = 0; i < 12; i++) {
       const r = game(`nok-${i}`, noK);
       expect(allValid(r)).toBe(true);
       kicks += r.plays.filter((p) => p.offense === 0 && (p.type === 'field_goal' || p.type === 'extra_point')).length;
-      twos += r.plays.filter((p) => p.offense === 0 && p.type === 'two_point').length;
+      expect(r.plays.some((p) => p.offense === 0 && (p.type === 'field_goal' || p.type === 'extra_point') && p.kicker)).toBe(false);
+      teamKicks += r.teamStats[0].teamFga + r.teamStats[0].teamXpa;
       teamPunts += r.teamStats[0].teamPunts;
       expect(r.warnings.join(' ')).toMatch(/no K/);
     }
-    expect(kicks).toBe(0); expect(twos).toBeGreaterThan(0); expect(teamPunts).toBeGreaterThan(0);
+    expect(kicks).toBeGreaterThan(0); expect(teamKicks).toBe(kicks); expect(teamPunts).toBeGreaterThan(0);
     // A tiny roster (offense only) still produces a valid game with team-credited defense.
     const tiny = makeTeam('AAA'); tiny.roster = tiny.roster.filter((p) => ['QB', 'RB', 'WR'].includes(p.position) && p.depth === 1);
     const r = game('tiny', tiny);

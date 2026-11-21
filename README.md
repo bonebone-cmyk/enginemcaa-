@@ -80,8 +80,11 @@ to phrase recaps from validated data and to transcribe screenshots for an admini
 ### The rules the code enforces
 
 1. **Roster accuracy** — every individual credit points at an active rostered player on the right team. A missing position
-   falls back to an authorized secondary position, then to a team-level credit, otherwise the simulation stops with a
-   message. No names are ever invented. Checked again by validation before a result can be approved.
+   falls back to an authorized secondary position, then to a **Team** credit. A team needs no roster at all to be
+   simulated: with no QB, the receivers still get their catches and the throws are credited to the team; with no
+   receivers, the QB gets the passing line and the catches go to the team; with no kicker, kicks are the team's. Every
+   total still balances (team passing = player + Team passing = player + Team receiving), and the box score shows a
+   *Team* row. No names are ever invented. Checked again by validation before a result can be approved.
 2. **Independent percentages** — Activity, Upset and Star are rolled from separate random streams against their own
    percentage and drive different mechanisms. They are never added or averaged. Every roll is stored and shown.
 3. **Primetime score authority** — an imported CFB 27 score, imported period scores and locked statistics are inputs to a

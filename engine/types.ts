@@ -229,6 +229,9 @@ export interface TeamLine {
   punts: number; puntYds: number;
   // team-credited events that have no eligible individual
   teamRushAtt: number; teamRushYds: number; teamTackles: number; teamSacks: number; teamInt: number; teamFr: number; teamPunts: number; teamPuntYds: number;
+  // Credited to the team when no rostered player fills the role (for example, passes thrown when no QB is rostered).
+  teamPassAtt: number; teamPassCmp: number; teamPassYds: number; teamPassTd: number; teamPassInt: number; teamSacked: number; teamSackYdsLost: number;
+  teamTargets: number; teamRec: number; teamRecYds: number; teamRecTd: number; teamFumbles: number; teamFgm: number; teamFga: number; teamXpm: number; teamXpa: number; teamRushTd: number;
 }
 
 export interface PercentageCheck {

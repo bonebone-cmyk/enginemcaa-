@@ -51,9 +51,10 @@ function describeAction(p: Play, name: (id?: string) => string, abbr: [string, s
   const fum = () => {
     if (!p.fumbler) return '';
     const forced = p.forcedBy ? `, forced by ${name(p.forcedBy)}` : '';
-    if (!p.fumbleLost) return ` ${name(p.fumbler)} fumbles${forced}, recovered by ${teamName[off]}.`;
+    const who = p.fumbler ? name(p.fumbler) : teamName[off];
+    if (!p.fumbleLost) return ` ${who} fumbles${forced}, recovered by ${teamName[off]}.`;
     const rec = p.recoveredBy ? name(p.recoveredBy) : teamName[def];
-    return ` ${name(p.fumbler)} FUMBLES${forced}, recovered by ${rec}${p.td === def ? ' and returned for a TOUCHDOWN' : p.returnYards ? `, returned ${p.returnYards} yards` : ''}.`;
+    return ` ${who} FUMBLES${forced}, recovered by ${rec}${p.td === def ? ' and returned for a TOUCHDOWN' : p.returnYards ? `, returned ${p.returnYards} yards` : ''}.`;
   };
   switch (p.type) {
     case 'kickoff': {
@@ -74,11 +75,11 @@ function describeAction(p: Play, name: (id?: string) => string, abbr: [string, s
       return `${teamName[off]} kneels ${gain(p.yards)}.`;
     case 'sack': {
       const by = p.sackers?.length ? p.sackers.map((s) => name(s)).join(' and ') : teamName[def];
-      if (p.points?.kind === 'SAFETY') return `${name(p.passer)} sacked in the end zone by ${by} for a SAFETY.`;
-      return `${name(p.passer)} sacked by ${by} ${gain(p.yards)} to the ${after()}.${fum()}`;
+      if (p.points?.kind === 'SAFETY') return `${p.passer ? name(p.passer) : `${teamName[off]} passer`} sacked in the end zone by ${by} for a SAFETY.`;
+      return `${p.passer ? name(p.passer) : `${teamName[off]} passer`} sacked by ${by} ${gain(p.yards)} to the ${after()}.${fum()}`;
     }
     case 'pass': {
-      const qb = name(p.passer);
+      const qb = p.passer ? name(p.passer) : teamName[off];
       const tgt = p.target ? name(p.target) : '';
       if (p.turnover === 'interception') {
         const by = p.interceptor ? name(p.interceptor) : teamName[def];
@@ -86,8 +87,8 @@ function describeAction(p: Play, name: (id?: string) => string, abbr: [string, s
         return `${qb} pass${tgt ? ` intended for ${tgt}` : ''} INTERCEPTED by ${by}${ret}.`;
       }
       if (!p.complete) return `${qb} pass incomplete${tgt ? ` to ${tgt}` : ''}${p.pd ? `, broken up by ${name(p.pd)}` : ''}.`;
-      if (p.td === off) return `${qb} pass complete to ${tgt} for ${p.yards} yard${p.yards === 1 ? '' : 's'} and a TOUCHDOWN.`;
-      return `${qb} pass complete to ${tgt} ${gain(p.yards)} to the ${after()}${tk}.${p.firstDown ? ' First down.' : ''}${fum()}`;
+      if (p.td === off) return `${qb} pass complete${tgt ? ` to ${tgt}` : ''} for ${p.yards} yard${p.yards === 1 ? '' : 's'} and a TOUCHDOWN.`;
+      return `${qb} pass complete${tgt ? ` to ${tgt}` : ''} ${gain(p.yards)} to the ${after()}${tk}.${p.firstDown ? ' First down.' : ''}${fum()}`;
     }
     case 'punt': {
       const who = p.punter ? name(p.punter) : teamName[off];

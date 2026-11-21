@@ -201,7 +201,8 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
   const lineups: [Lineup, Lineup] = [sim.sides[0].lineup, sim.sides[1].lineup];
   const L = lockCtx(input, lineups);
   const kickerOf = (s: Side) => lineups[s].kicker;
-  const qb1 = (s: Side) => lineups[s].qbs[0].p.id;
+  // '' when the team has no QB: passes are then credited to the team, and '' never matches a lock.
+  const qb1 = (s: Side) => lineups[s].qbs[0]?.p.id ?? '';
 
   // ---- 1a. Period plan: regulation and overtime points per side.
   let reg: [number[] | null, number[] | null] = [null, null];
@@ -269,7 +270,7 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
   const missedXp: [number, number] = [0, 0];
   for (const s of [0, 1] as Side[]) {
     const k = kickerOf(s);
-    const cons: Parameters<typeof combos>[1] = { noKick: !k };
+    const cons: Parameters<typeof combos>[1] = { noKick: false }; // kicks without a rostered K are credited to the team
     if (k && L.get(k.id, 'fgm') != null) cons.fg = L.get(k.id, 'fgm')! - otKicks[s].fg;
     if (k && L.get(k.id, 'xpm') != null) cons.n7 = L.get(k.id, 'xpm')! - otKicks[s].xp;
     if ((cons.fg ?? 0) < 0 || (cons.n7 ?? 0) < 0) throw hard(`${teams[s].name}: locked kicking totals are smaller than the kicks implied by the overtime scores.`);
@@ -282,7 +283,7 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
     let perQ: Combo[];
     if (reg[s]) {
       const opts = reg[s]!.map((p, qi) => {
-        const o = combos(p, { noKick: !k });
+        const o = combos(p, { noKick: false });
         if (!o.length) throw hard(`${teams[s].name} cannot score exactly ${p} point${p === 1 ? '' : 's'} in quarter ${qi + 1}${k ? '' : ' without a rostered kicker'}.`);
         return o;
       });
@@ -384,7 +385,7 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
     const c = pool.filter((x) => L.get(x.p.id, key) == null && x.p.id !== exclude);
     return c.length ? rng.weighted(c, (x) => x.w).p.id : undefined;
   };
-  const rushPool = (s: Side) => [...lineups[s].rushers, { p: lineups[s].qbs[0].p, w: 0.15 }];
+  const rushPool = (s: Side) => [...lineups[s].rushers, ...lineups[s].qbs.slice(0, 1).map((q) => ({ p: q.p, w: 0.15 }))];
 
   const applyTdSpec = (s: Side, p: Play): boolean => {
     const list = tdSpecs[s];
@@ -401,12 +402,12 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
         passer = alt;
       }
       let target = spec.receiver ?? p.target!;
-      if ((!spec.receiver && L.get(target, 'recTd') != null) || target === passer) {
+      if ((!spec.receiver && target && L.get(target, 'recTd') != null) || (target && target === passer)) {
         const alt = free(lineups[s].receivers, 'recTd', passer);
         if (!alt) return false;
         target = alt;
       }
-      if (target === passer) return false;
+      if (target && target === passer) return false;
       p.passer = passer;
       p.target = target;
     } else {
@@ -472,7 +473,7 @@ function build(args: PrimetimeArgs, config: SimConfig, rng: Rng): { plays: Play[
             p.passer = intPasser[side].pop() ?? (L.get(p.passer!, 'passInt') == null ? p.passer : free(lineups[side].qbs, 'passInt'));
             const dl = intDefender[side].pop();
             p.interceptor = dl ?? (p.interceptor && L.get(p.interceptor, 'defInt') == null ? p.interceptor : free(lineups[other(side)].defenders.map((x) => ({ p: x, w: 1 })), 'defInt'));
-            if (!p.passer) ok = false;
+            if (!p.passer && lineups[side].qbs.length) ok = false;
             if (p.target === p.passer) p.target = undefined;
           } else if (L.get(p.passer!, 'passInt') != null || (p.interceptor && L.get(p.interceptor, 'defInt') != null)) ok = false;
         }
@@ -801,9 +802,9 @@ function repair(sim: GameSim, input: PrimetimeInput, L: LockCtx, lineups: [Lineu
     }
     return null;
   }
-  const qbId = (s: Side) => lineups[s].qbs[0].p.id;
+  const qbId = (s: Side) => lineups[s].qbs[0]?.p.id;
   const pool = (s: Side, kind: 'rush' | 'rec' | 'def' | 'pass', stat: string): string[] => {
-    const base = kind === 'rush' ? [...lineups[s].rushers.map((x) => x.p.id), qbId(s)] : kind === 'rec' ? lineups[s].receivers.map((x) => x.p.id) : kind === 'pass' ? lineups[s].qbs.map((x) => x.p.id) : lineups[s].defenders.map((x) => x.id);
+    const base = kind === 'rush' ? [...lineups[s].rushers.map((x) => x.p.id), ...(qbId(s) ? [qbId(s)!] : [])] : kind === 'rec' ? lineups[s].receivers.map((x) => x.p.id) : kind === 'pass' ? lineups[s].qbs.map((x) => x.p.id) : lineups[s].defenders.map((x) => x.id);
     const extra = locks.filter((l) => l.pid && l.side === s && CAT[l.stat as LockablePlayerStat] === kind).map((l) => l.pid!);
     const all = [...new Set([...base, ...extra])];
     // Prefer players who are short on this stat, then unlocked players.

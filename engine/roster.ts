@@ -86,22 +86,28 @@ export interface RosterCheck {
 }
 
 /** Roster preflight. Errors block the simulation; warnings describe team-level attribution that will be used. */
+/**
+ * Roster report. A team can always be simulated, even with no players at all: any action that has no eligible rostered
+ * player is credited to the team ("Team" in the box score), never to an invented player. `errors` is kept for callers
+ * but is always empty; `warnings` explains what will be team-credited.
+ */
 export function checkRoster(team: TeamInput, allowInactive = false): RosterCheck {
   const errors: string[] = [];
   const warnings: string[] = [];
   const l = buildLineup(team, allowInactive);
-  if (l.all.size === 0) errors.push(`${team.name} has no active rostered players.`);
-  else {
-    if (l.qbs.length === 0) errors.push(`${team.name} has no rostered QB (primary or secondary). Add a quarterback before simulating.`);
-    const nonQbReceivers = l.receivers.filter((s) => l.qbs.length !== 1 || s.p.id !== l.qbs[0].p.id);
-    if (nonQbReceivers.length === 0) errors.push(`${team.name} has no rostered receiver (WR, TE, RB or FB) other than the quarterback.`);
-    if (l.rushers.length === 0 && l.qbs.length) warnings.push(`${team.name} has no RB/FB: every designed run is a quarterback keeper.`);
-    if (!l.kicker) warnings.push(`${team.name} has no K: the team goes for two after touchdowns and never attempts field goals.`);
-    if (!l.punter) warnings.push(`${team.name} has no P or K: punts are credited to the team, not an individual.`);
-    if (l.defenders.length === 0) warnings.push(`${team.name} has no defensive players: tackles, sacks and takeaways are credited to the team.`);
-    if (l.ol.length === 0) warnings.push(`${team.name} has no offensive linemen: line snaps and sacks allowed are not tracked individually.`);
-    if (l.kr.length === 0) warnings.push(`${team.name} has no eligible returner: kickoffs and punts are not returned.`);
+  if (l.all.size === 0) {
+    warnings.push(`${team.name} has no active rostered players: every statistic for this team is credited to the team.`);
+    return { errors, warnings };
   }
+  if (l.qbs.length === 0) warnings.push(`${team.name} has no QB: passes are thrown by the team (receivers still get their catches).`);
+  const nonQbReceivers = l.receivers.filter((s) => l.qbs.length !== 1 || s.p.id !== l.qbs[0].p.id);
+  if (nonQbReceivers.length === 0) warnings.push(`${team.name} has no receiver (WR, TE, RB or FB): catches are credited to the team.`);
+  if (l.rushers.length === 0) warnings.push(l.qbs.length ? `${team.name} has no RB/FB: every designed run is a quarterback keeper.` : `${team.name} has no RB, FB or QB: runs are credited to the team.`);
+  if (!l.kicker) warnings.push(`${team.name} has no K: field goals and extra points are credited to the team.`);
+  if (!l.punter) warnings.push(`${team.name} has no P or K: punts are credited to the team, not an individual.`);
+  if (l.defenders.length === 0) warnings.push(`${team.name} has no defensive players: tackles, sacks and takeaways are credited to the team.`);
+  if (l.ol.length === 0) warnings.push(`${team.name} has no offensive linemen: line snaps and sacks allowed are not tracked individually.`);
+  if (l.kr.length === 0) warnings.push(`${team.name} has no eligible returner: kickoffs and punts are not returned.`);
   return { errors, warnings };
 }
 

@@ -176,10 +176,13 @@ export function validateGame(r: Pick<GameResult, 'plays' | 'final' | 'quarters' 
       const t = calc.teamStats[s];
       const o = calc.teamStats[other(s)];
       const sackYds = r.config.sackConvention === 'nfl' ? o.sackYds : 0;
-      if (sum(s, (l) => l.passYds) !== sum(s, (l) => l.recYds)) e.push(`${teams[s].abbr} passing yards ≠ receiving yards`);
-      if (sum(s, (l) => l.passYds) - sackYds !== t.passYds) e.push(`${teams[s].abbr} player passing yards ≠ team passing yards`);
-      if (sum(s, (l) => l.passCmp) !== sum(s, (l) => l.rec)) e.push(`${teams[s].abbr} completions ≠ receptions`);
-      if (sum(s, (l) => l.passTd) !== sum(s, (l) => l.recTd)) e.push(`${teams[s].abbr} passing TDs ≠ receiving TDs`);
+      // "Team" lines hold what no rostered player could be credited with (for example, passes when no QB is rostered).
+      const pYds = sum(s, (l) => l.passYds) + t.teamPassYds, rYds = sum(s, (l) => l.recYds) + t.teamRecYds;
+      if (pYds !== rYds) e.push(`${teams[s].abbr} passing yards ≠ receiving yards`);
+      if (pYds - sackYds !== t.passYds) e.push(`${teams[s].abbr} player passing yards ≠ team passing yards`);
+      if (sum(s, (l) => l.passCmp) + t.teamPassCmp !== sum(s, (l) => l.rec) + t.teamRec) e.push(`${teams[s].abbr} completions ≠ receptions`);
+      if (sum(s, (l) => l.passCmp) + t.teamPassCmp !== t.passCmp || sum(s, (l) => l.passAtt) + t.teamPassAtt !== t.passAtt) e.push(`${teams[s].abbr} player passing ≠ team passing`);
+      if (sum(s, (l) => l.passTd) + t.teamPassTd !== sum(s, (l) => l.recTd) + t.teamRecTd) e.push(`${teams[s].abbr} passing TDs ≠ receiving TDs`);
       if (sum(s, (l) => l.rushYds) + t.teamRushYds !== t.rushYds) e.push(`${teams[s].abbr} player rushing yards ≠ team rushing yards`);
       if (sum(s, (l) => l.rushAtt) + t.teamRushAtt !== t.rushAtt) e.push(`${teams[s].abbr} player carries ≠ team carries`);
       if (t.totalYds !== t.passYds + t.rushYds) e.push(`${teams[s].abbr} total yards ≠ passing + rushing`);
@@ -193,11 +196,11 @@ export function validateGame(r: Pick<GameResult, 'plays' | 'final' | 'quarters' 
       const d = other(s);
       const dt = calc.teamStats[d];
       if (t.intThrown !== sum(d, (l) => l.defInt) + dt.teamInt) e.push(`${teams[s].abbr} interceptions thrown ≠ ${teams[d].abbr} interceptions made`);
-      if (t.intThrown !== sum(s, (l) => l.passInt)) e.push(`${teams[s].abbr} team interceptions ≠ passer interceptions`);
+      if (t.intThrown !== sum(s, (l) => l.passInt) + t.teamPassInt) e.push(`${teams[s].abbr} team interceptions ≠ passer interceptions`);
       if (t.fumblesLost !== sum(d, (l) => l.fr) + dt.teamFr) e.push(`${teams[s].abbr} fumbles lost ≠ ${teams[d].abbr} fumble recoveries`);
       if (t.turnovers !== t.intThrown + t.fumblesLost) e.push(`${teams[s].abbr} turnovers ≠ interceptions + fumbles lost`);
       const sacks = sum(d, (l) => l.sacks) + dt.teamSacks;
-      if (Math.abs(sacks - dt.sacks) > 0.11 || dt.sacks !== sum(s, (l) => l.sacked)) e.push(`${teams[d].abbr} sacks ≠ times ${teams[s].abbr} passers were sacked`);
+      if (Math.abs(sacks - dt.sacks) > 0.11 || dt.sacks !== sum(s, (l) => l.sacked) + t.teamSacked) e.push(`${teams[d].abbr} sacks ≠ times ${teams[s].abbr} passers were sacked`);
     }
     add('Defensive takeaways and sacks match offensive turnovers and sacks taken', e);
   }

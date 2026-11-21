@@ -142,13 +142,15 @@ export class GameSim {
     const fatigue = clamp((this.sides[def].defSnaps - 38) / 110, 0, 0.35);
     return (this.rate(off, 'off') - this.rate(def, 'def')) / 12 + fatigue + this.boost[off];
   }
-  private pickSlot(slots: Slot[], side: Side, exclude?: string, bias?: (s: Slot) => number): RosterPlayer {
+  /** A rostered player for the role, or null when the roster has nobody for it (the play is then credited to the team). */
+  private pickSlot(slots: Slot[], side: Side, exclude?: string, bias?: (s: Slot) => number): RosterPlayer | null {
     const pool = exclude ? slots.filter((s) => s.p.id !== exclude) : slots;
+    if (!pool.length) return null;
     const st = this.stars(side);
     return this.rng.weighted(pool, (s) => s.w * (st.has(s.p.id) ? 1.5 : 1) * (bias ? bias(s) : 1)).p;
   }
-  private qb(side: Side): RosterPlayer {
-    return this.sides[side].lineup.qbs[0].p;
+  private qb(side: Side): RosterPlayer | null {
+    return this.sides[side].lineup.qbs[0]?.p ?? null;
   }
   private defender(def: Side, role: Parameters<typeof defWeight>[1], exclude?: string): string | undefined {
     const D = this.sides[def];
@@ -212,8 +214,9 @@ export class GameSim {
       const sev = this.injRng.weighted(severityWeights(this.cfg.chaos), (x) => x.w);
       const next = new Map(this.out[side]).set(id, sev.kind === 'quarter' ? this.quarter + 1 : Infinity);
       const l = this.lineupWithout(side, next);
-      // Never leave a team unable to play: without a QB or a receiver the player stays in (no one is invented).
-      if (!l.qbs.length || !l.receivers.some((r) => r.p.id !== l.qbs[0].p.id)) continue;
+      // Never knock out a team's last QB or last receiver (the team could still play, but it would read oddly).
+      const cur = this.sides[side].lineup;
+      if ((cur.qbs.length && !l.qbs.length) || (cur.receivers.length && !l.receivers.length)) continue;
       this.out[side] = next;
       this.sides[side].lineup = l;
       play.injury = { playerId: id, side, kind: sev.kind, gamesOut: sev.gamesOut };
@@ -374,7 +377,8 @@ export class GameSim {
     const toGoal = 100 - this.ballOn;
     const fgDist = toGoal + 17;
     const kicker = S.lineup.kicker;
-    const range = kicker ? 50 + Math.round(((kicker.rating ?? 70) - 70) / 5) : 0;
+    // With no rostered K the team still kicks (credited to the team, average leg).
+    const range = 50 + Math.round(((kicker?.rating ?? 70) - 70) / 5);
 
     if (timed) {
       // Victory formation.
@@ -385,7 +389,7 @@ export class GameSim {
       }
       if (q === 2 && this.clock <= 22 && this.ballOn < 35 && this.down <= 3) return this.kneel(off);
       // Last-second field goal.
-      if (kicker && this.clock <= 9 && fgDist <= range + 4 && (q === 2 || (q === 4 && lead <= 0 && lead >= -3))) return this.fieldGoal(off);
+      if (this.clock <= 9 && fgDist <= range + 4 && (q === 2 || (q === 4 && lead <= 0 && lead >= -3))) return this.fieldGoal(off);
     }
 
     // Pre-snap / no-play penalties.
@@ -401,7 +405,7 @@ export class GameSim {
     }
     if (this.down === 4) {
       const d = this.dist;
-      const inRange = !!kicker && fgDist <= range;
+      const inRange = fgDist <= range;
       let choice: 'go' | 'fg' | 'punt';
       if (this.ot) {
         const need = this.otSecond ? -lead : 0; // points needed to stay alive
@@ -500,7 +504,7 @@ export class GameSim {
   }
 
   /** A fumble lost to the defense. Returns true when the play ended the drive. */
-  private fumbleLost(p: Partial<Play> & { type: Play['type']; offense: Side }, yards: number, fumbler: RosterPlayer): boolean {
+  private fumbleLost(p: Partial<Play> & { type: Play['type']; offense: Side }, yards: number, fumbler: RosterPlayer | null): boolean {
     const off = p.offense;
     const def = other(off);
     const spotOff = this.ballOn + yards;
@@ -510,7 +514,7 @@ export class GameSim {
     const defSpot = 100 - spotOff;
     const scoop = !this.force.plain && this.rng.chance(0.05 * this.returnMul);
     const ret = scoop ? 100 - defSpot : this.rng.chance(0.3) ? Math.min(this.rng.int(1, 12), 99 - defSpot) : 0;
-    const base = { ...p, yards, down: this.down, distance: this.dist, fourthDownTry: this.down === 4 || undefined, fumbler: fumbler.id, fumbleLost: true, forcedBy, recoveredBy, turnover: 'fumble' as const, returnYards: ret, tacklers: undefined };
+    const base = { ...p, yards, down: this.down, distance: this.dist, fourthDownTry: this.down === 4 || undefined, fumbler: fumbler?.id, fumbleLost: true, forcedBy, recoveredBy, turnover: 'fumble' as const, returnYards: ret, tacklers: undefined };
     if (this.cur) this.cur.yards += yards;
     if (scoop) {
       this.emit({ ...base, td: def, points: { side: def, pts: 6, kind: 'TD' } });
@@ -544,13 +548,13 @@ export class GameSim {
     let y = this.rng.normal(mean, 3.1);
     if (this.rng.chance(clamp(0.075 + 0.02 * e + dprof.bigPlay + (star ? 0.045 : 0), 0.02, 0.22) * this.bigMul)) y += 7 + this.rng.exp(11);
     const yards = clamp(Math.round(y), Math.max(-7, -this.ballOn), toGoal);
-    const p = { type: 'run' as const, offense: off, rusher: rusher.id, tacklers: this.tacklers(def, 'runTackle') };
+    const p = { type: 'run' as const, offense: off, rusher: rusher?.id, tacklers: this.tacklers(def, 'runTackle') };
     const pFum = 0.021 * prof.fumble * (1 - 0.15 * this.sharp(off)) * (star ? 0.7 : 1) * this.turnMul;
     if (this.rng.chance(pFum)) {
       if (this.rng.chance(this.surging(def) ? 0.6 : 0.48)) {
         if (this.fumbleLost(p, yards, rusher)) return;
       } else {
-        return this.settle({ ...p, fumbler: rusher.id, fumbleLost: false }, yards, 'run', hurry, milk);
+        return this.settle({ ...p, fumbler: rusher?.id, fumbleLost: false }, yards, 'run', hurry, milk);
       }
     }
     this.settle(p, yards, 'run', hurry, milk);
@@ -587,14 +591,14 @@ export class GameSim {
       const sackers = a ? (this.rng.chance(0.16) ? [a, this.defender(def, 'sack', a)].filter(Boolean) as string[] : [a]) : [];
       const yards = -clamp(Math.round(2 + this.rng.exp(4.5)), 1, 14);
       const ol = S.lineup.ol.length ? this.rng.pick(S.lineup.ol).id : undefined;
-      const p = { type: 'sack' as const, offense: off, passer: qb.id, sackers, sackAllowedBy: ol };
+      const p = { type: 'sack' as const, offense: off, passer: qb?.id, sackers, sackAllowedBy: ol };
       if (this.rng.chance(0.07) && this.rng.chance(0.5) && this.fumbleLost({ ...p }, Math.max(yards, -this.ballOn + 2), qb)) return;
       return this.settle(p, yards, 'sack', hurry, milk);
     }
     // Scramble.
     if (this.rng.chance(0.035 + prof.qbRun * 0.15)) {
       const yards = clamp(Math.round(this.rng.normal(5.5 + e, 5)), Math.max(-4, -this.ballOn), toGoal);
-      return this.settle({ type: 'run', offense: off, rusher: qb.id, tacklers: this.tacklers(def, 'passTackle') }, yards, 'run', hurry, milk);
+      return this.settle({ type: 'run', offense: off, rusher: qb?.id, tacklers: this.tacklers(def, 'passTackle') }, yards, 'run', hurry, milk);
     }
 
     // Target and depth.
@@ -610,7 +614,7 @@ export class GameSim {
       if (depth === 'short') return pos === 'WR' ? 0.9 : 1.35;
       return 1;
     };
-    const target = this.pickSlot(S.lineup.receivers, off, qb.id, bias);
+    const target = this.pickSlot(S.lineup.receivers, off, qb?.id, bias);
     const star = this.isStar(off, target) || this.isStar(off, qb);
     const tr = this.pr(off, target);
 
@@ -620,7 +624,7 @@ export class GameSim {
     if (this.surging(def)) pInt *= 1.25;
     pInt = clamp(pInt, 0.005, 0.09) * this.turnMul;
     const air = depth === 'short' ? clamp(Math.round(this.rng.normal(4.5, 2.5)), -3, 9) : depth === 'medium' ? clamp(Math.round(this.rng.normal(13, 3)), 8, 19) : clamp(Math.round(this.rng.normal(29, 8)), 20, 55);
-    const p = { type: 'pass' as const, offense: off, passer: qb.id, target: target.id, depth };
+    const p = { type: 'pass' as const, offense: off, passer: qb?.id, target: target?.id, depth };
     const roll = this.rng.next();
 
     if (roll < pInt) {
@@ -821,9 +825,9 @@ export class GameSim {
     if (forced === 'NONE') return;
     // In overtime the try is skipped when the touchdown already decides the game.
     if (this.ot && !forced && ((this.otSecond && lead > 0) || this.lastDefTd)) return;
-    let two = !S.lineup.kicker;
+    let two = false;
     if (this.ot >= 2) two = true;
-    else if (S.lineup.kicker && !this.untimed && this.quarter === 4 && [-2, -5, -10, 1, 5, 12].includes(lead)) two = true;
+    else if (!this.untimed && this.quarter === 4 && [-2, -5, -10, 1, 5, 12].includes(lead)) two = true;
     if (forced) two = forced.startsWith('2PT');
     if (two) return void this.twoPoint(side, false);
     const k = S.lineup.kicker;
@@ -844,13 +848,13 @@ export class GameSim {
     const savedBall = this.ballOn;
     this.ballOn = 97;
     const pass = this.rng.chance(0.62) || !S.lineup.rushers.length;
-    const hasTarget = S.lineup.receivers.some((s) => s.p.id !== qb.id);
+    const hasTarget = S.lineup.receivers.some((s) => s.p.id !== qb?.id);
     if (pass && hasTarget) {
-      const target = this.pickSlot(S.lineup.receivers, side, qb.id);
-      this.emit({ type: 'two_point', offense: side, passer: qb.id, target: target.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
+      const target = this.pickSlot(S.lineup.receivers, side, qb?.id);
+      this.emit({ type: 'two_point', offense: side, passer: qb?.id, target: target?.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
     } else {
       const rusher = S.lineup.rushers.length ? this.pickSlot(S.lineup.rushers, side) : qb;
-      this.emit({ type: 'two_point', offense: side, rusher: rusher.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
+      this.emit({ type: 'two_point', offense: side, rusher: rusher?.id, good, points: good ? { side, pts: 2, kind: '2PT' } : undefined });
     }
     this.ballOn = savedBall;
     void otTry;

@@ -285,7 +285,7 @@ export function RunDetail() {
               </Card>
               <div className="lg:col-span-2"><ScoreChart scoring={scoring} teams={teams} quarters={r.quarters[0].length} /></div>
             </div>)}
-          {tab === 'box' && <BoxScore players={players} teams={teams} primetime={r.mode === 'primetime'} />}
+          {tab === 'box' && <BoxScore players={players} teams={teams} primetime={r.mode === 'primetime'} teamStats={teamStats} />}
           {tab === 'team' && <TeamStats stats={teamStats} teams={teams} />}
           {tab === 'scoring' && <ScoringSummary scoring={scoring} teams={teams} />}
           {tab === 'highlights' && <Highlights list={highlights} teams={teams} generated={r.mode === 'primetime' ? 'Generated reconstruction — these moments were not observed.' : undefined} />}
